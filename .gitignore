@@ -1,0 +1,43 @@
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Local Python environments and build outputs
+/.venv/
+/venv/
+/env/
+/build/
+/dist/
+*.egg-info/
+
+# Local recordings, preprocessing results, model weights and training outputs
+/data/
+/checkpoints/
+/weights/
+/runs/
+/wandb/
+/outputs/
+/output/
+/logs/
+/tmp/
+/.cache/
+/third_party/
+*.log
+
+# Machine-specific settings and editor files
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~

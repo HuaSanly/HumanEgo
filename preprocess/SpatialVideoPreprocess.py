@@ -582,26 +582,6 @@ def generate_phases(generator):
     return phases
 
 
-def release_stage_models(step: str) -> None:
-    """Later stages consume files, so their predecessors need not retain VRAM."""
-    import gc
-    import torch
-
-    if step == "dinosam":
-        from preprocess import DINOSAMOps
-        if DINOSAMOps._WORKER is not None:
-            DINOSAMOps._WORKER.close()
-            DINOSAMOps._WORKER = None
-    elif step == "cotracker":
-        from preprocess.CoTrackerOffline import reset_cotracker_offline
-        reset_cotracker_offline()
-    else:
-        return
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
 def _pipeline_class():
     # Heavy imports stay in workers, including when only --help is requested.
     from preprocess.Preprocess import Preprocess
@@ -699,7 +679,6 @@ def _pipeline_class():
             for step in DOWNSTREAM_STEPS:
                 print(f"[Spatial] {session.name}: {step}", flush=True)
                 getattr(self, f"preprocess_{step}")()
-                release_stage_models(step)
             record.update(validate_training(session))
             record["downstream_complete"] = True
             _write_json(source_record, record)

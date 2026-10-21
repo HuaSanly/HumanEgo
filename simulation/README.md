@@ -42,6 +42,39 @@ python simulation/scripts/run_episode.py --mode single --set control.alpha=0.3
 
 Headless rendering uses `MUJOCO_GL=egl` (set automatically).
 
+## pick_cube scene
+
+`configs/pick_cube.yaml` adds a blue open plastic container (`obj1`) and a red
+rigid block (`obj2`), matching `cfg/preprocess/tasks/pick_cube.yaml`. It inherits
+the existing robot rig, table, camera calibration, arm mode and controller settings.
+Prop dimensions, masses, friction and initial `[x, y, yaw_deg]` poses are editable
+under `scene.objects`; the supplied values are simulation defaults, not measured
+real-world dimensions. The container has a bottom and four collision walls.
+
+This is a **physics scene preview**: the arms hold their existing start poses,
+no checkpoint is loaded, and no task success rate is reported. The released
+`serve_bread` policy and evaluation remain available through the default config.
+
+```bash
+# Shared table texture only; the new props need no external meshes or textures.
+python simulation/scripts/build_assets.py --table-only
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --video
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --mode single \
+  --scene '{"container":[0.47,0,20],"cube":[0.46,-0.22,30]}' --duration 5 --video
+
+# Add the preview to the local viewer, preserving previously built serve_bread entries.
+python simulation/scripts/build_web.py --config simulation/configs/pick_cube.yaml
+python simulation/web/tools/serve.py 8791 simulation/web
+```
+
+Open `http://127.0.0.1:8791/?task=pick_cube`, select **Live physics**, drag either
+prop in the initial-condition map (scroll to rotate), then press **Run physics**.
+The browser runs five seconds of physics without ONNX or policy downloads.
+Both one-arm and two-arm rigs are supported; use `--set 'mode="single"'` when
+building the web preview to add the one-arm version. Recorded previews and videos
+are saved under `simulation/runs/pick_cube_*`; the original scene remains the
+default whenever its standard web configuration is present.
+
 ## Results
 
 Per-arm success = bread released and resting on the plate, on randomized scenes (paper protocol,

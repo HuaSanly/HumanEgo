@@ -29,10 +29,18 @@ SIM_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(SIM_ROOT)
 
 
-def load_config(path: Optional[str] = None, overrides: Optional[dict] = None) -> dict:
-    path = path or os.path.join(SIM_ROOT, "configs", "serve_bread.yaml")
+def _read_config(path: str) -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f)
+    base = cfg.pop("base_config", None)
+    if base:
+        cfg = deep_update(_read_config(os.path.join(os.path.dirname(path), base)), cfg)
+    return cfg
+
+
+def load_config(path: Optional[str] = None, overrides: Optional[dict] = None) -> dict:
+    path = path or os.path.join(SIM_ROOT, "configs", "serve_bread.yaml")
+    cfg = _read_config(path)
     # per-robot calibration (e.g. a different gripper's tool pitch) sits between the defaults
     # and explicit overrides
     robot = (overrides or {}).get("robot", cfg.get("robot"))
@@ -155,6 +163,8 @@ class ServeBreadSim:
 
     def default_scene(self) -> dict:
         sc = self.cfg["scene"]
+        if self.cfg.get("task") == "pick_cube":
+            return {name: list(obj["pose"]) for name, obj in sc["objects"].items()}
         if self.cfg.get("mode") == "single":
             return {"plate": list(sc["single"]["plate"]), "bread_right": list(sc["single"]["bread"]["pose"])}
         out = {"plate": list(sc["plate"])}
@@ -168,6 +178,12 @@ class ServeBreadSim:
         else:
             z = self.meta["objects"][name]["extents"][2] / 2 + 0.0008
         self.place_object(name, [x, y, z] + list(yaw_quat(yaw_deg)))
+
+    def object_role_masks(self, masks: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        """Map physical object instances to the dataset's obj1 / obj2 labels."""
+        roles = self.meta.get("object_roles", {"obj1": [n for n in self.obj_names if n.startswith("bread")],
+                                               "obj2": ["plate"]})
+        return {role: np.bitwise_or.reduce([masks[n] for n in names]) for role, names in roles.items()}
 
     def place_object(self, name: str, pose7) -> None:
         """Rigidly place an object (pos + wxyz quat of its centre), zero velocity."""
@@ -191,7 +207,10 @@ class ServeBreadSim:
             fid = self.soft[name].flex_id
             a, n = self.m.flex_vertadr[fid], self.m.flex_vertnum[fid]
             return float(self.d.flexvert_xpos[a:a + n, 2].min())
-        return float(self.object_pos(name)[2] - self.meta["objects"][name]["extents"][2] / 2)
+        ext = np.asarray(self.meta["objects"][name]["extents"])
+        if self.cfg.get("task") == "pick_cube":
+            return float(self.object_pos(name)[2] - np.abs(self.body_T_world(name)[2, :3]) @ ext / 2)
+        return float(self.object_pos(name)[2] - ext[2] / 2)
 
     def object_pos(self, name: str) -> np.ndarray:
         return np.asarray(self.object_pose7(name)[:3])

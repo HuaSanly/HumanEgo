@@ -7,20 +7,22 @@ const el = (tag, attrs = {}, html = '') => { const e = document.createElement(ta
 const fmt = (x, d = 1) => (x == null ? '—' : Number(x).toFixed(d));
 const pct = (x) => `${Math.round(100 * x)}%`;
 
-const state = { manifest: null, robot: null, camera: null, mode: null, cfg: null, rollout: null, ro: null, live: false, liveScene: null, liveSession: null };
+const state = { manifest: null, task: 'serve_bread', robot: null, camera: null, mode: null, cfg: null, rollout: null, ro: null, live: false, liveScene: null, liveSession: null };
 const viewer = new SimViewer($('#viewport'));
 const video = $('#pip-video');
+const policyTag = $('.tag').innerHTML;
 
 // ------------------------------------------------------------------ boot
 async function boot() {
   const man = await (await fetch('data/manifest.json', { cache: 'no-cache' })).json();
   state.manifest = man;
   const d = man.default || {};
+  state.task = d.task || man.configs[0].task || 'serve_bread';
   state.robot = d.robot || man.configs[0].robot;
   state.camera = d.camera || man.configs[0].camera;
   state.mode = d.mode || man.configs[0].mode;
   const qs = new URLSearchParams(location.search);
-  for (const k of ['robot', 'camera', 'mode']) if (qs.get(k)) state[k] = qs.get(k);
+  for (const k of ['task', 'robot', 'camera', 'mode']) if (qs.get(k)) state[k] = qs.get(k);
   if (qs.get('kiosk')) { document.body.classList.add('kiosk'); if (qs.get('kiosk') === 'clean') document.body.classList.add('nohud'); }
   renderStats();
   renderPills();
@@ -35,9 +37,14 @@ async function boot() {
 
 function renderStats() {
   const m = state.manifest;
-  const all = m.configs.flatMap(c => c.rollouts);
+  const all = m.configs.filter(c => !c.scene_only).flatMap(c => c.rollouts);
   const sides = all.flatMap(r => Object.values(r.per_side || {}));
   const ok = sides.filter(s => s.success).length;
+  if (!all.length) {
+    $('#stats').innerHTML = `<span class="chip"><b>${m.configs.length}</b> scene previews</span>`
+      + '<span class="chip">RGB-D · rigid body physics</span>';
+    return;
+  }
   $('#stats').innerHTML = [
     `<span class="chip"><b>${all.length}</b> policy rollouts</span>`,
     `<span class="chip"><b>${pct(ok / Math.max(1, sides.length))}</b> breads served</span>`,
@@ -46,8 +53,8 @@ function renderStats() {
   ].join('');
 }
 
-function cfgOf(robot, camera, mode) {
-  return state.manifest.configs.find(c => c.robot === robot && c.camera === camera && c.mode === mode);
+function cfgOf(robot, camera, mode, task = state.task) {
+  return state.manifest.configs.find(c => c.robot === robot && c.camera === camera && c.mode === mode && (c.task || 'serve_bread') === task);
 }
 
 function renderPills() {
@@ -56,38 +63,42 @@ function renderPills() {
     const box = $(id); box.innerHTML = '';
     for (const [val, label] of items) {
       const b = el('button', { className: 'pill' + (state[key] === val ? ' on' : ''), textContent: label });
-      const probe = { robot: state.robot, camera: state.camera, mode: state.mode, [key]: val };
-      b.disabled = !cfgOf(probe.robot, probe.camera, probe.mode);
+      const probe = { task: state.task, robot: state.robot, camera: state.camera, mode: state.mode, [key]: val };
+      b.disabled = !cfgOf(probe.robot, probe.camera, probe.mode, probe.task);
       b.onclick = () => { state[key] = val; renderPills(); selectConfig(); };
       box.appendChild(b);
     }
   };
   const run = $('#pills-run'); run.innerHTML = '';
-  for (const [val, label] of [[false, 'Replays'], [true, 'Live ✦']]) {
+  for (const [val, label] of [[false, state.cfg?.scene_only ? 'Preview' : 'Replays'], [true, state.cfg?.scene_only ? 'Live physics' : 'Live ✦']]) {
     const b = el('button', { className: 'pill' + (state.live === val ? ' on' : ''), textContent: label,
-      title: val ? 'Run the released policy in your browser (MuJoCo WebAssembly + ONNX Runtime)' : 'Pre-computed policy rollouts' });
+      title: state.cfg?.scene_only ? 'Physics scene preview' : (val ? 'Run the released policy in your browser (MuJoCo WebAssembly + ONNX Runtime)' : 'Pre-computed policy rollouts') });
     b.disabled = val && !(state.cfg?.live);
     b.onclick = () => setLive(val);
     run.appendChild(b);
   }
+  mk('#pills-task', 'task', [...new Set(m.configs.map(c => c.task || 'serve_bread'))].map(t => [t, t]));
   mk('#pills-robot', 'robot', Object.entries(m.robots));
   mk('#pills-camera', 'camera', Object.entries(m.cameras));
   mk('#pills-mode', 'mode', [['bimanual', 'Two arms'], ['single', 'One arm']]);
 }
 
 async function selectConfig(rolloutId) {
+  state.liveSession?.stop();
+  viewer.endLive();
   let cfg = cfgOf(state.robot, state.camera, state.mode);
-  if (!cfg) {   // fall back to any config of this robot
-    cfg = state.manifest.configs.find(c => c.robot === state.robot) || state.manifest.configs[0];
-    Object.assign(state, { robot: cfg.robot, camera: cfg.camera, mode: cfg.mode });
+  if (!cfg) {
+    cfg = state.manifest.configs.find(c => (c.task || 'serve_bread') === state.task) || state.manifest.configs[0];
+    Object.assign(state, { task: cfg.task || 'serve_bread', robot: cfg.robot, camera: cfg.camera, mode: cfg.mode });
     renderPills();
   }
+  if (state.live && !cfg.live) state.live = false;
   state.cfg = cfg;
+  updateSceneUI();
   renderPills();
-  if (state.live && !cfg.live) await setLive(false);
   const ok = cfg.rollouts.flatMap(r => Object.values(r.per_side)).filter(s => s.success).length;
   const n = cfg.rollouts.flatMap(r => Object.values(r.per_side)).length;
-  $('#count').textContent = `${cfg.rollouts.length} rollouts · ${pct(ok / Math.max(1, n))} served`;
+  $('#count').textContent = cfg.scene_only ? 'Physics preview · unevaluated' : `${cfg.rollouts.length} rollouts · ${pct(ok / Math.max(1, n))} served`;
   showLoading('Loading the robot…');
   const pick = cfg.rollouts.find(r => r.id === rolloutId) || cfg.rollouts.find(r => r.featured) || cfg.rollouts[0];
   const roP = fetchRollout(pick.id, pick.fmt);         // in parallel with the model and its meshes
@@ -95,7 +106,33 @@ async function selectConfig(rolloutId) {
   const model = await (await fetch(`data/models/${cfg.model}.json`)).json();
   await viewer.loadModel(model, (p) => showLoading(`Loading meshes… ${Math.round(p * 100)}%`));
   await selectRollout(pick.id, !state.live, roP);
-  if (state.live) { state.liveScene = structuredClone(state.ro.scene); await state.liveSession.load(cfg.model); renderMinimap(); }
+  if (state.live) {
+    state.liveScene = structuredClone(state.ro.scene);
+    if (!cfg.scene_only) await ensureOrt();
+    await state.liveSession.load(cfg.model); renderMinimap();
+  }
+}
+
+function updateSceneUI() {
+  const preview = state.cfg.scene_only;
+  $('.tag').innerHTML = preview
+    ? 'The <b>pick_cube scene</b>: a blue plastic container and a red block on the same calibrated robot rig. Physics preview; no policy is running.'
+    : policyTag;
+  $('#how').style.display = preview ? 'none' : '';
+  $('#results').style.display = preview ? 'none' : '';
+  $('#tuning').style.display = preview || !state.manifest.tuning ? 'none' : '';
+  $('#pip-wrap').style.display = preview || !document.querySelector('[data-ov="pip"]').classList.contains('on') ? 'none' : '';
+  $('#legend-obj1').textContent = preview ? 'container (obj1)' : 'bread keypoints';
+  $('#legend-obj2').textContent = preview ? 'red block (obj2)' : 'plate keypoints';
+  $('#mm-help').innerHTML = preview
+    ? (state.live ? 'Drag the <b>container</b> and <b>block</b>, scroll to rotate, then press <b>Run physics</b>.' : 'Blue: open container. Red: block. Switch to <b>Live physics</b> to edit the layout.')
+    : (state.live
+      ? 'Place the <b>plate</b> and the <b>breads</b> anywhere, then press <b>Run live</b>: the released policy runs <b>in your browser</b> (MuJoCo WebAssembly physics + ONNX Runtime).'
+      : 'Each dot is a <b>pre-computed policy rollout</b> (green = served, red = failed). Click a dot or <b>drag the bread</b> to snap to the nearest initial condition.');
+  $('#btn-replay-l').textContent = state.live ? (preview ? 'Run physics' : 'Run live') : 'Replay';
+  $('#pip-video').style.display = state.live ? 'none' : '';
+  $('#pip-canvas').style.display = state.live ? '' : 'none';
+  document.querySelector('.timeline').style.visibility = state.live ? 'hidden' : '';
 }
 
 function showLoading(msg) { $('#loading-msg').textContent = msg; $('#loading').classList.remove('hide'); }
@@ -124,6 +161,12 @@ async function selectRollout(id, autoplay = true, roP = null) {
 function renderResult() {
   const ro = state.ro, res = ro.result;
   const box = $('#result'); box.innerHTML = '';
+  if (state.cfg.scene_only) {
+    box.innerHTML = '<div class="res-sum"><span>Scene preview · no task success metric</span></div>';
+    $('#res-meta').textContent = 'unevaluated';
+    $('#hud-title').innerHTML = `<span class="dot"></span><span>pick_cube · ${state.manifest.robots[state.cfg.robot]}</span>`;
+    return;
+  }
   for (const side of Object.keys(res.per_side)) {
     const r = res.per_side[side];
     const ok = r.success;
@@ -166,15 +209,29 @@ function renderMinimap() {
     }
   }
   // current layout
-  const p = sc.plate; const pr = 0.1225 * MMK;
-  s += `<circle class="${state.live ? 'mm-bread' : ''}" data-obj="plate" cx="${mmX(p[1])}" cy="${mmY(p[0])}" r="${pr}" fill="url(#pg)" stroke="#e6f0fb" stroke-opacity=".7" style="${state.live ? 'cursor:grab' : ''}"/>`;
-  for (const side of sides) {
-    const b = sc[`bread_${side}`]; if (!b) continue;
-    const L = side === 'right' && state.cfg.mode === 'bimanual' ? 0.12 : 0.138, W = 0.066;
-    const th = b[2] * Math.PI / 180;     // long axis (cos th, sin th) in world x/y -> map (-sin, -cos)
-    const ang = Math.atan2(-Math.cos(th), -Math.sin(th)) * 180 / Math.PI;
-    s += `<g class="mm-bread" data-side="${side}" data-obj="bread_${side}" transform="translate(${mmX(b[1])},${mmY(b[0])}) rotate(${ang})" style="cursor:grab">
-            <ellipse rx="${L / 2 * MMK}" ry="${W / 2 * MMK}" fill="#d98a3a" stroke="#ffcf9e" stroke-width="1.5"/></g>`;
+  if (state.cfg.scene_only) {
+    for (const [name, obj] of Object.entries(state.cfg.objects)) {
+      const [x, y, yaw] = sc[name], w = obj.size[1] * MMK, h = obj.size[0] * MMK;
+      const color = `rgb(${obj.rgba.slice(0, 3).map(v => Math.round(v * 255)).join(',')})`;
+      s += `<g data-obj="${name}" transform="translate(${mmX(y)},${mmY(x)}) rotate(${-yaw})" style="cursor:${state.live ? 'grab' : 'default'}">
+        <title>${name} (${obj.role})</title><rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="2" fill="${color}" stroke="#cbd5e1"/>`;
+      if (obj.kind === 'container') {
+        const wall = obj.wall * MMK;
+        s += `<rect x="${-w / 2 + wall}" y="${-h / 2 + wall}" width="${w - 2 * wall}" height="${h - 2 * wall}" fill="#142958"/>`;
+      }
+      s += '</g>';
+    }
+  } else {
+    const p = sc.plate; const pr = 0.1225 * MMK;
+    s += `<circle class="${state.live ? 'mm-bread' : ''}" data-obj="plate" cx="${mmX(p[1])}" cy="${mmY(p[0])}" r="${pr}" fill="url(#pg)" stroke="#e6f0fb" stroke-opacity=".7" style="${state.live ? 'cursor:grab' : ''}"/>`;
+    for (const side of sides) {
+      const b = sc[`bread_${side}`]; if (!b) continue;
+      const L = side === 'right' && state.cfg.mode === 'bimanual' ? 0.12 : 0.138, W = 0.066;
+      const th = b[2] * Math.PI / 180;     // long axis (cos th, sin th) in world x/y -> map (-sin, -cos)
+      const ang = Math.atan2(-Math.cos(th), -Math.sin(th)) * 180 / Math.PI;
+      s += `<g class="mm-bread" data-side="${side}" data-obj="bread_${side}" transform="translate(${mmX(b[1])},${mmY(b[0])}) rotate(${ang})" style="cursor:grab">
+              <ellipse rx="${L / 2 * MMK}" ry="${W / 2 * MMK}" fill="#d98a3a" stroke="#ffcf9e" stroke-width="1.5"/></g>`;
+    }
   }
   svg.innerHTML = s;
   $('#mm-meta').textContent = `${state.cfg.rollouts.length} scenes`;
@@ -245,20 +302,14 @@ async function setLive(on) {
   if (on === state.live) return;
   state.live = on;
   renderPills();
-  $('#mm-help').innerHTML = on
-    ? 'Place the <b>plate</b> and the <b>breads</b> anywhere, then press <b>Run live</b>: the released policy runs <b>in your browser</b> (MuJoCo WebAssembly physics + ONNX Runtime).'
-    : 'Each dot is a <b>pre-computed policy rollout</b> (green = served, red = failed). Click a dot or <b>drag the bread</b> to snap to the nearest initial condition.';
-  $('#btn-replay-l').textContent = on ? 'Run live' : 'Replay';
-  $('#pip-video').style.display = on ? 'none' : '';
-  $('#pip-canvas').style.display = on ? '' : 'none';
-  document.querySelector('.timeline').style.visibility = on ? 'hidden' : '';
+  updateSceneUI();
   if (!on) { state.liveSession?.stop(); viewer.endLive(); await selectRollout(state.rollout.id, true); renderMinimap(); return; }
   pause();
   state.liveScene = structuredClone(state.ro.scene);
   renderMinimap();
   showLoading('Preparing live mode…');
   try {
-    await ensureOrt();
+    if (!state.cfg.scene_only) await ensureOrt();
     const { LiveSession } = await import('./live/live.js');
     state.liveSession ||= new LiveSession(viewer, (m) => { $('#loading-msg').textContent = m; liveStatus(m); });
     await state.liveSession.load(state.cfg.model);
@@ -274,7 +325,7 @@ async function runLive() {
   const ls = state.liveSession; if (!ls) return;
   const pc = $('#pip-canvas'), g = pc.getContext('2d');
   g.fillStyle = '#05070a'; g.fillRect(0, 0, pc.width, pc.height);
-  $('#result').innerHTML = '<div class="res-sum"><span>Running the policy…</span></div>';
+  $('#result').innerHTML = `<div class="res-sum"><span>${state.cfg.scene_only ? 'Running physics preview…' : 'Running the policy…'}</span></div>`;
   const sides = state.cfg.mode === 'single' ? ['right'] : ['right', 'left'];
   const t0 = performance.now(); let nPol = 0;
   $('#pip').style.opacity = 1;
@@ -283,7 +334,7 @@ async function runLive() {
     for (const side of sides) {
       const e = entries[side], ctx = ls.ep?.ctx?.[side];
       let phase = 'waiting', cls = '';
-      if (!ctx) phase = 'scene setup';
+      if (!ctx) phase = state.cfg.scene_only ? 'holding start pose' : 'scene setup';
       else if (ctx.wrap) { phase = ctx.wrap === 'finished' ? 'done' : 'releasing'; cls = 'done'; }
       else if (!ctx.active) phase = `starts at ${state.liveSession.spec.control.bimanual_start_delay ?? 6} s`;
       else if (e) { phase = e.grasping ? 'carrying' : (e.gmax > 0.5 ? 'reaching to grasp' : 'reaching'); if (e.grasping) cls = 'grasp'; }
@@ -298,6 +349,11 @@ async function runLive() {
     liveStatus(`${ls.policy.device === 'webgpu' ? 'WebGPU' : 'CPU'} · t = ${ls.ep.t.toFixed(1)} s · re-plan ${nPol}`);
   }, (res) => {
     const box = $('#result'); box.innerHTML = '';
+    if (state.cfg.scene_only) {
+      box.innerHTML = '<div class="res-sum"><span>Physics preview finished · unevaluated</span></div>';
+      $('#res-meta').textContent = 'unevaluated';
+      return;
+    }
     for (const [side, r] of Object.entries(res)) box.appendChild(el('div', { className: 'res-arm' }, `<div class="k">${side} arm</div>
       <div class="v ${r.success ? 'ok' : 'bad'}">${r.success ? '✓ Served' : '✗ Missed'}</div><div class="s">${fmt(100 * r.dist_to_plate_center, 1)} cm from plate centre</div>`));
     box.appendChild(el('div', { className: 'res-sum' }, `<span>Live run <b>${fmt(ls.ep.t, 1)} s</b> sim time</span><span>${((performance.now() - t0) / 1000).toFixed(0)} s wall</span>`));
@@ -398,18 +454,24 @@ document.querySelectorAll('[data-cam]').forEach(b => b.onclick = () => {
 viewer.onUserCamera = () => document.querySelectorAll('[data-cam]').forEach(x => x.classList.remove('on'));
 document.querySelectorAll('[data-ov]').forEach(b => b.onclick = () => {
   const on = !b.classList.contains('on'); b.classList.toggle('on', on);
-  if (b.dataset.ov === 'pip') $('#pip-wrap').style.display = on ? '' : 'none';
+  if (b.dataset.ov === 'pip') $('#pip-wrap').style.display = on && !state.cfg.scene_only ? '' : 'none';
   else viewer.setOverlay(b.dataset.ov, on);
 });
 $('#btn-shuffle').onclick = () => {
   if (state.live) {   // paper protocol: random offsets / depths / yaw
+    if (state.cfg.scene_only) {
+      const R = (a, b) => a + Math.random() * (b - a);
+      state.liveScene = { container: [R(0.44, 0.50), R(-0.03, 0.03), R(-30, 30)],
+                          cube: [R(0.40, 0.54), R(-0.32, -0.22), R(0, 90)] };
+      renderMinimap(); return;
+    }
     const R = (a, b) => a + Math.random() * (b - a), sc = { plate: [R(0.41, 0.53), R(-0.05, 0.05), 0] };
     if (state.cfg.mode === 'single') { sc.plate[1] = R(0.05, 0.17); sc.bread_right = [R(0.39, 0.55), sc.plate[1] - R(0.16, 0.38), R(55, 125)]; }
     else for (const [s, sg] of [['right', -1], ['left', 1]]) sc[`bread_${s}`] = [R(0.38, 0.54), sc.plate[1] + sg * R(0.2, 0.35), R(55, 125)];
     state.liveScene = sc; renderMinimap(); return;
   }
   const rs = state.cfg.rollouts.filter(r => r.id !== state.rollout.id);
-  selectRollout(rs[Math.floor(Math.random() * rs.length)].id);
+  if (rs.length) selectRollout(rs[Math.floor(Math.random() * rs.length)].id);
 };
 $('#btn-replay').onclick = () => (state.live ? runLive() : play(true));
 window.addEventListener('keydown', (e) => {

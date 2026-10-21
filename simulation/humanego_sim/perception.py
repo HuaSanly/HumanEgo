@@ -201,6 +201,8 @@ class SimPerception:
         mn = self.mask_noise
         if mn is not None:
             gt = {name: mn.instance(name, mk) for name, mk in gt.items()}
+        if self.env.cfg.get("task") == "pick_cube":
+            return self.env.object_role_masks(gt)
         obj1 = np.zeros((self.env.H, self.env.W), np.uint8)
         for name, mk in gt.items():
             if name.startswith("bread"):

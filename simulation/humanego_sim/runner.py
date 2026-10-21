@@ -87,6 +87,9 @@ def load_policy(cfg: dict, device: str = "cuda") -> ICTPolicy:
 class EpisodeRunner:
     def __init__(self, cfg: dict, policy: Optional[ICTPolicy] = None, device: str = "cuda",
                  env: Optional[ServeBreadSim] = None):
+        if cfg.get("scene_only"):
+            raise ValueError("This config is a scene preview; use scripts/run_episode.py --config <path> "
+                             "to record physics without the serve_bread policy or success metric")
         self.cfg = cfg
         self.device = device
         self.env = env or ServeBreadSim(cfg)

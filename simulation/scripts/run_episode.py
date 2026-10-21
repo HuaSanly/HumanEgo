@@ -17,10 +17,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from humanego_sim.env import load_config  # noqa: E402
+from humanego_sim.env import ServeBreadSim, load_config  # noqa: E402
 from humanego_sim.profiles import add_profile_arg  # noqa: E402
 from humanego_sim.replay import render_episode_video  # noqa: E402
-from humanego_sim.runner import EpisodeRunner  # noqa: E402
 
 
 def main():
@@ -35,6 +34,7 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--video", action="store_true")
     ap.add_argument("--camera_view", default="front_view")
+    ap.add_argument("--duration", type=float, default=5.0, help="physics preview duration (scene-only configs)")
     add_profile_arg(ap)
     args = ap.parse_args()
 
@@ -50,10 +50,20 @@ def main():
             cur = cur.setdefault(p, {})
         cur[parts[-1]] = json.loads(val)
     cfg = load_config(args.config, ov)
-    name = args.out or f"{cfg['robot']}_{cfg['camera']}_{cfg['mode']}_s{args.seed}"
+    prefix = f"{cfg['task']}_" if cfg.get("scene_only") else ""
+    name = args.out or f"{prefix}{cfg['robot']}_{cfg['camera']}_{cfg['mode']}_s{args.seed}"
     log_dir = os.path.join(os.path.dirname(HERE), "runs", name)
-    runner = EpisodeRunner(cfg)
     scene = json.loads(args.scene) if args.scene else None
+    if cfg.get("scene_only"):
+        from humanego_sim.scene_preview import record_scene
+        env = ServeBreadSim(cfg, seed=args.seed, render=False)
+        result = record_scene(env, log_dir, scene=scene, duration=args.duration)
+        print(json.dumps(dict(result, scene_only=True, log_dir=log_dir), indent=1))
+        if args.video:
+            print("video:", render_episode_video(env, log_dir, camera=args.camera_view))
+        return
+    from humanego_sim.runner import EpisodeRunner
+    runner = EpisodeRunner(cfg)
     res = runner.run(scene=scene, seed=args.seed, log_dir=log_dir)
     print(json.dumps({"success": res.success, "per_side": res.per_side, "duration": res.duration,
                       "wall": res.wall_time}, indent=1))

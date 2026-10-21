@@ -6,7 +6,7 @@ scene_only: false
 mode: single
 
 policy:
-  ckpt: ./runs/pick_cube/HumanEgo/latest.pt
+  ckpt: ~/GlassEgo/runs/Block Jamming real gournd/baseline_camera_onlygood/latest.pt # ./runs/pick_cube/HumanEgo/latest.pt
 
 scene:
   objects:

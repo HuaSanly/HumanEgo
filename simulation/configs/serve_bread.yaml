@@ -105,7 +105,7 @@ perception:                # mirrors cfg/inference/serve_bread + cfg/preprocess/
 control:                   # cfg/inference/serve_bread/Control.yaml (real rig)
   control_freq: 10.0
   step_stride: 2
-  look_ahead_offset: 45
+  look_ahead_offset: 40
   max_history_len: 1
   alpha: 0.5
   alpha_rot: 0.0

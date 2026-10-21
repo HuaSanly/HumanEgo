@@ -13,12 +13,12 @@ scene:
     container:
       kind: container
       role: obj1
-      pose: [0.47, 0.10, 0.0]
+      pose: [0.47, 0.10, 90.0]
       size: [0.18, 0.14, 0.07]
       wall: 0.004
       mass: 0.20
       friction: [0.4, 0.01, 0.001]
-      rgba: [0.08, 0.30, 0.85, 1.0]
+      rgba: [0.529, 0.808, 0.922, 1.0]
     cube:
       kind: cube
       role: obj2

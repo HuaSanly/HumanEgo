@@ -54,8 +54,10 @@ real-world dimensions. The container has a bottom and four collision walls.
 The default is a **closed-loop run of your trained pick_cube model**, using
 `runs/pick_cube/HumanEgo/latest.pt` and the `config.json` / `dataset_stats.json`
 next to it. It uses the right arm, as in training (`single_hand: true`,
-`camera_frame`, `absolute` actions). No public model download is needed. The
-robot, camera and production controller settings are inherited; bread-specific
+`absolute` actions). The checkpoint's `config.json` selects `camera_frame` or
+`anchor_frame` automatically; do not change this flag to reinterpret trained weights.
+No public model download is needed. The robot, camera and production controller
+settings are inherited; bread-specific
 grasp refinement and plate-based idle completion are not used. Success requires
 the grasped block to be released, settled and fully inside the container.
 
@@ -71,6 +73,11 @@ python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.y
   --set policy.num_inference_steps=20 --set control.policy_period=0.3 \
   --set control.max_episode_time=40 --device cuda --seed 0 --video
 
+# Use an anchor-frame checkpoint directly from GlassEgo (no model copying).
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml \
+  --set 'policy.ckpt="~/GlassEgo/runs/Block Jamming real gournd/new_03/latest.pt"' \
+  --set policy.num_inference_steps=10 --video --out pick_cube_anchor
+
 # Run the trained model and export its rollout for the web viewer.
 python simulation/scripts/build_web.py --config simulation/configs/pick_cube.yaml
 python simulation/web/tools/serve.py 8791 simulation/web
@@ -84,6 +91,18 @@ for pick_cube. Videos and episode logs are in `simulation/runs/<out>/`.
 and are rejected for pick_cube. Use `--set` for your own inference/controller
 parameters. Same-seed reruns are intended for reproducing a run; task success
 must be measured rather than inferred from a model loading successfully.
+
+For `anchor_frame`, each side freezes its own initial perceived `obj1` pose as
+the reference, matching training's `virtual_static_anchor`. In pick_cube this is
+the blue container. ICT object poses can still update independently; the reference
+used to encode geometry and decode trajectories stays fixed throughout the episode.
+Left-arm perception already supplies a mirrored reference, so it is not mirrored
+again. Missing anchors, fewer than three finite 3D keypoints or invalid reference
+matrices stop the run instead of falling back to camera coordinates. `camera_frame`
+retains its existing input and decoding path. Both modes retain the existing
+gripper decoding, grasp assistance, physics and controller settings, and require
+absolute actions. Anchor-frame support covers Python inference and recorded
+replay, not browser ONNX Live inference.
 
 For geometry inspection only, add `--set scene_only=true --duration 5`; it skips
 the policy. Physics-only previews can also be built with

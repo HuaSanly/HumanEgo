@@ -62,6 +62,7 @@ class SideCtx:
     forced_lift_anchor_p_base: Optional[np.ndarray] = None
     pred_done_prob: float = 0.0
     done_reason: str = ""
+    reference_anchor: Optional[ObjectState] = None
 
 
 @dataclass
@@ -97,8 +98,8 @@ class EpisodeRunner:
         self.device = device
         self.env = env or ServeBreadSim(cfg)
         self.policy = policy or load_policy(cfg, device)
-        if self.policy.frame_mode != "camera_frame" or self.policy.action_mode != "absolute":
-            raise NotImplementedError("sim runner currently supports camera_frame + absolute checkpoints")
+        if self.policy.frame_mode not in ("camera_frame", "anchor_frame") or self.policy.action_mode != "absolute":
+            raise NotImplementedError("sim runner supports camera_frame or anchor_frame + absolute checkpoints")
         cc = cfg["control"]
         self.cc = cc
         self.T_align = T_ALIGN_ARIA
@@ -119,6 +120,23 @@ class EpisodeRunner:
 
     def _manipulated_body(self, side: str) -> str:
         return "cube" if self.task == "pick_cube" else f"bread_{side}"
+
+    def _static_reference_anchor(self, side: str, so: SideObjects) -> ObjectState:
+        label = f"anchor_frame: {side} anchor '{self.anchor_key}'"
+        meta = so.objs_meta.get(self.anchor_key)
+        if meta is None or self.anchor_key not in so.dynamic_obj_poses:
+            raise ValueError(f"{label} is missing from the initial perception")
+        points = np.asarray(meta.get("kpts_3d", []), dtype=float)
+        if (points.ndim != 2 or points.shape[1] != 3
+                or np.isfinite(points).all(axis=1).sum() < 3):
+            raise ValueError(f"{label} needs at least three finite 3D keypoints")
+        T = np.array(so.T_anchor_in_cam_static, dtype=float, copy=True)
+        if (T.shape != (4, 4) or not np.isfinite(T).all()
+                or not np.allclose(T[3], [0, 0, 0, 1], atol=1e-6)
+                or not np.allclose(T[:3, :3].T @ T[:3, :3], np.eye(3), atol=1e-5)
+                or not np.isclose(np.linalg.det(T[:3, :3]), 1.0, atol=1e-5)):
+            raise ValueError(f"{label} has an invalid static pose matrix")
+        return ObjectState(T)
 
     # ------------------------------------------------------------------
     def _seed_policy_noise(self, seed: int):
@@ -271,9 +289,12 @@ class EpisodeRunner:
 
     # ------------------------------------------------------------------
     def _run_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
-        """Port of Inference._run_side for camera_frame / absolute checkpoints."""
+        """Port of Inference._run_side for camera/anchor-frame absolute checkpoints."""
         env, pol, arm = self.env, self.policy, self.env.arms[ctx.side]
         so, st = ctx.objs, ctx.hand
+        reference_anchor = ctx.reference_anchor if pol.frame_mode == "anchor_frame" else None
+        if pol.frame_mode == "anchor_frame" and reference_anchor is None:
+            raise ValueError(f"anchor_frame: {ctx.side} static reference anchor was not initialized")
         Tr = arm.get_T_ee_in_cam() @ self.T_align
         Tv = mirror_pose(Tr) if ctx.is_flip else Tr
         gv = self._grasp_val(arm)
@@ -327,7 +348,11 @@ class EpisodeRunner:
         # ---- ICT + inference (released ICTPolicy) ----
         hs = pol.single_hand_side
         objs = {k: ObjectState(v.copy()) for k, v in so.dynamic_obj_poses.items()}
-        x_ict, mask = pol.build_ict({hs: Tv}, {hs: gv}, objs, self.anchor_key)
+        if pol.frame_mode == "anchor_frame":
+            x_ict, mask = pol.build_ict({hs: Tv}, {hs: gv}, objs, self.anchor_key,
+                                      reference_anchor=reference_anchor)
+        else:
+            x_ict, mask = pol.build_ict({hs: Tv}, {hs: gv}, objs, self.anchor_key)
         x_rgb = pol.prepare_image(vis)
         active_K = self.perception.K_flip if ctx.is_flip else self.perception.K
         a_uv = pol.compute_anchor_uv(ObjectState(so.dynamic_obj_poses.get(self.anchor_key, so.T_anchor_in_cam_static)),
@@ -351,12 +376,12 @@ class EpisodeRunner:
                 ctx.is_done = True
                 ctx.done_reason = "policy_done"
 
-        # ---- decode (camera_frame, absolute) ----
+        # ---- decode (reference frame -> camera frame, absolute) ----
         he = min(int(self.cc.get("exec_horizon", pol.pred_horizon)), pol.pred_horizon)
         pos, o6d, grasp = traj[hs]
         raw, pT_world = [], []
         for k in range(he):
-            Tv_k = pol.decode_ee_in_cam(pos[k], o6d[k], None, self.T_align)   # hand(ref=cam) @ inv(T_align)
+            Tv_k = pol.decode_ee_in_cam(pos[k], o6d[k], reference_anchor, self.T_align)
             Treal = mirror_pose(Tv_k) if ctx.is_flip else Tv_k
             pt = T_to_p(Treal)
             pt = self._apply_forced_lift(pt, arm, ctx.forced_lift_counter, ctx.forced_lift_anchor_p_base)
@@ -435,6 +460,10 @@ class EpisodeRunner:
                                     "T_anchor_static": np.asarray(so.T_anchor_in_cam_static, float).tolist()}
                                 for s, so in side_objs.items()}
         ctxs = {s: SideCtx(side=s, is_flip=(s == "left"), objs=side_objs[s]) for s in sides}
+        if self.policy.frame_mode == "anchor_frame":
+            for s, ctx in ctxs.items():
+                # Match training's virtual_static_anchor, even if the object moves later.
+                ctx.reference_anchor = self._static_reference_anchor(s, ctx.objs)
         ctxs["right"].is_active = True
         controller = SimController(env.arms, cc)
         geoms = {s: self._perceived_geometry(s, side_objs[s]) for s in sides}

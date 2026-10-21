@@ -193,6 +193,8 @@ class ICTPolicy:
         grippers: Dict[str, float],               # {"left": 0..1, "right": 0..1}
         obj_states: Dict[str, ObjectState],       # {"obj1": ObjectState, ...}, obj1 == anchor
         anchor_key: str = "obj1",
+        *,
+        reference_anchor: Optional[ObjectState] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Build the (1, max_ict, ict_dim) ICT sequence + (1, max_ict) validity mask.
 
@@ -201,9 +203,12 @@ class ICTPolicy:
             [type_id, pose_in_ref(9), hand-in-entity(9 single / 18 dual), flag]
         where hand-in-entity encodes where each hand sits relative to that entity
         — that relative encoding is what makes the representation interaction-centric.
+
+        reference_anchor fixes the reference frame independently of the anchor
+        object's current pose. Omit it to use the existing object-based reference.
         """
         anchor = obj_states.get(anchor_key)
-        T_cam_in_ref = self._T_cam_in_ref(anchor)
+        T_cam_in_ref = self._T_cam_in_ref(reference_anchor if reference_anchor is not None else anchor)
 
         hands_in_ref: Dict[str, np.ndarray] = {}
         for side, T_h_cam in ee_poses_in_cam.items():

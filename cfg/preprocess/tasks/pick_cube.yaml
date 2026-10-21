@@ -1,0 +1,14 @@
+AriaHands:
+  hand_selection: "right"
+
+DINOSAM:
+  dinosam_prompt:
+    obj1: "a blue plastic container ."
+    obj2: "a red block ."
+    arm: "human arms . human hands ."
+
+CamTriangulator:
+  pose_method:
+    obj1: "pca1"
+    obj2: "pca1"
+    default: "pca1"

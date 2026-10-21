@@ -30,7 +30,7 @@ htmlcov/
 /.cache/
 /third_party/
 *.log
-
+/_raw/
 # Machine-specific settings and editor files
 .env
 .env.*
@@ -41,3 +41,4 @@ htmlcov/
 *.swp
 *.swo
 *~
+/local_start.md

@@ -43,6 +43,8 @@ def summary_rows(configs: List[dict]) -> List[dict]:
                "right": side_rate(rs, "right"), "left": side_rate(rs, "left"),
                "both": (sum(float(r["success"]) for r in rs) / len(rs)) if rs else None,
                "profile": prof.get("profile", "production")}
+        if c.get("task") == "pick_cube":
+            row["task"] = "pick_cube"
         if prof.get("autotune_run"):
             row["autotune_run"] = prof["autotune_run"]
         ho = [prof[k] for k in ("final", "held_out", "held_out_2") if k in prof]
@@ -58,10 +60,13 @@ def results_note(configs: List[dict], robot_labels: Dict[str, str]) -> str:
     """Protocol + where the numbers come from, generated from the configs' profiles."""
     by_robot = {}
     for c in configs:
-        if c.get("scene_only"):
+        if c.get("scene_only") or c.get("task") == "pick_cube":
             continue
         by_robot.setdefault(c["robot"], c.get("profile") or {"profile": "production"})
     if not by_robot:
+        if any(c.get("task") == "pick_cube" and not c.get("scene_only") for c in configs):
+            return "pick_cube: local trained policy rollouts. Success means the grasped block was released " \
+                   "and is resting fully inside the container. These are individual runs, not a benchmark."
         return "Scene previews only. No policy was run and no task success rate was evaluated."
     parts = []
     for robot, prof in by_robot.items():
@@ -168,7 +173,8 @@ def validate(man: dict, web: Optional[str] = None) -> List[str]:
                 need(isinstance(r.get("success"), bool), f"{rid}: success must be a bool")
                 need(r.get("success") == all(v["success"] for v in r.get("per_side", {}).values()),
                      f"{rid}: success != all sides served")
-                names = ["plate"] + [f"bread_{s}" for s in sides]
+                names = (["container", "cube"] if c.get("task") == "pick_cube"
+                         else ["plate"] + [f"bread_{s}" for s in sides])
             for name in names:
                 need(len(r.get("scene", {}).get(name, [])) == 3, f"{rid}: scene.{name} must be [x, y, yaw]")
             need(r.get("fmt", "json") in ("json", "bin"), f"{rid}: bad fmt")

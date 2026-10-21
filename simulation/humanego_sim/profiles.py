@@ -73,6 +73,9 @@ def profile_overrides(profile: Optional[str], robot: str, base_cfg: Optional[dic
         raise ValueError(f"unknown profile '{profile}', choose from {PROFILES}")
     if profile == "production":
         return {}
+    if (base_cfg or {}).get("task", "serve_bread") != "serve_bread":
+        raise ValueError("The tuned profiles are for serve_bread; use --profile production for pick_cube "
+                         "and override its inference parameters with --set")
     t = load_tuned(robot)
     ov = dotted_to_nested(t["params"], base_cfg)
     return deep_update(ov, dotted_to_nested(t.get("requires", {}), base_cfg))

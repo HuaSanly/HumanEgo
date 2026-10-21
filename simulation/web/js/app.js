@@ -40,6 +40,12 @@ function renderStats() {
   const all = m.configs.filter(c => !c.scene_only).flatMap(c => c.rollouts);
   const sides = all.flatMap(r => Object.values(r.per_side || {}));
   const ok = sides.filter(s => s.success).length;
+  if (m.configs.some(c => c.task === 'pick_cube' && !c.scene_only)) {
+    $('#stats').innerHTML = `<span class="chip"><b>${all.length}</b> model rollouts</span>`
+      + `<span class="chip"><b>${all.filter(r => r.success).length}</b> successful episodes</span>`
+      + '<span class="chip">trained task policies</span>';
+    return;
+  }
   if (!all.length) {
     $('#stats').innerHTML = `<span class="chip"><b>${m.configs.length}</b> scene previews</span>`
       + '<span class="chip">RGB-D · rigid body physics</span>';
@@ -98,7 +104,8 @@ async function selectConfig(rolloutId) {
   renderPills();
   const ok = cfg.rollouts.flatMap(r => Object.values(r.per_side)).filter(s => s.success).length;
   const n = cfg.rollouts.flatMap(r => Object.values(r.per_side)).length;
-  $('#count').textContent = cfg.scene_only ? 'Physics preview · unevaluated' : `${cfg.rollouts.length} rollouts · ${pct(ok / Math.max(1, n))} served`;
+  $('#count').textContent = cfg.scene_only ? 'Physics preview · unevaluated'
+    : `${cfg.rollouts.length} rollouts · ${pct(ok / Math.max(1, n))} ${state.task === 'pick_cube' ? 'placed' : 'served'}`;
   showLoading('Loading the robot…');
   const pick = cfg.rollouts.find(r => r.id === rolloutId) || cfg.rollouts.find(r => r.featured) || cfg.rollouts[0];
   const roP = fetchRollout(pick.id, pick.fmt);         // in parallel with the model and its meshes
@@ -114,18 +121,20 @@ async function selectConfig(rolloutId) {
 }
 
 function updateSceneUI() {
-  const preview = state.cfg.scene_only;
+  const preview = state.cfg.scene_only, cube = state.task === 'pick_cube';
   $('.tag').innerHTML = preview
     ? 'The <b>pick_cube scene</b>: a blue plastic container and a red block on the same calibrated robot rig. Physics preview; no policy is running.'
-    : policyTag;
-  $('#how').style.display = preview ? 'none' : '';
-  $('#results').style.display = preview ? 'none' : '';
-  $('#tuning').style.display = preview || !state.manifest.tuning ? 'none' : '';
+    : (cube ? 'The trained <b>pick_cube policy</b> running closed-loop in MuJoCo. Recorded model predictions drive the right arm to pick the red block and place it in the blue container.' : policyTag);
+  $('#how').style.display = cube ? 'none' : '';
+  $('#results').style.display = cube ? 'none' : '';
+  $('#tuning').style.display = cube || !state.manifest.tuning ? 'none' : '';
+  $('#reproduce').style.display = cube ? 'none' : '';
   $('#pip-wrap').style.display = preview || !document.querySelector('[data-ov="pip"]').classList.contains('on') ? 'none' : '';
-  $('#legend-obj1').textContent = preview ? 'container (obj1)' : 'bread keypoints';
-  $('#legend-obj2').textContent = preview ? 'red block (obj2)' : 'plate keypoints';
-  $('#mm-help').innerHTML = preview
-    ? (state.live ? 'Drag the <b>container</b> and <b>block</b>, scroll to rotate, then press <b>Run physics</b>.' : 'Blue: open container. Red: block. Switch to <b>Live physics</b> to edit the layout.')
+  $('#legend-obj1').textContent = cube ? 'container keypoints (obj1)' : 'bread keypoints';
+  $('#legend-obj2').textContent = cube ? 'red block keypoints (obj2)' : 'plate keypoints';
+  $('#mm-help').innerHTML = cube
+    ? (preview ? (state.live ? 'Drag the <b>container</b> and <b>block</b>, scroll to rotate, then press <b>Run physics</b>.' : 'Blue: open container. Red: block. Switch to <b>Live physics</b> to edit the layout.')
+      : 'Recorded <b>pick_cube</b> model rollout. Blue: container. Red: block. Change the initial poses in the scene config and rebuild to run a new layout.')
     : (state.live
       ? 'Place the <b>plate</b> and the <b>breads</b> anywhere, then press <b>Run live</b>: the released policy runs <b>in your browser</b> (MuJoCo WebAssembly physics + ONNX Runtime).'
       : 'Each dot is a <b>pre-computed policy rollout</b> (green = served, red = failed). Click a dot or <b>drag the bread</b> to snap to the nearest initial condition.');
@@ -170,12 +179,13 @@ function renderResult() {
   for (const side of Object.keys(res.per_side)) {
     const r = res.per_side[side];
     const ok = r.success;
+    const cube = state.task === 'pick_cube', dist = cube ? r.dist_to_container_center : r.dist_to_plate_center;
     box.appendChild(el('div', { className: 'res-arm' }, `<div class="k">${side} arm</div>
-      <div class="v ${ok ? 'ok' : 'bad'}">${ok ? '✓ Served' : '✗ Missed'}</div>
-      <div class="s">${fmt(100 * r.dist_to_plate_center, 1)} cm from plate centre</div>`));
+      <div class="v ${ok ? 'ok' : 'bad'}">${ok ? (cube ? '✓ Placed' : '✓ Served') : '✗ Missed'}</div>
+      <div class="s">${fmt(100 * dist, 1)} cm from ${cube ? 'container' : 'plate'} centre</div>`));
   }
   box.appendChild(el('div', { className: 'res-sum' }, `<span>Episode <b>${fmt(res.duration, 1)} s</b> sim time</span><span>${ro.policy.length} re-plans</span>`));
-  $('#res-meta').textContent = res.success ? 'all breads served' : 'partial';
+  $('#res-meta').textContent = state.task === 'pick_cube' ? (res.success ? 'cube placed' : 'not completed') : (res.success ? 'all breads served' : 'partial');
   const t = viewer.ro;
   $('#hud-title').innerHTML = `<span class="dot"></span><span>${state.manifest.robots[state.cfg.robot]} · ${state.manifest.cameras[state.cfg.camera]}</span>`;
 }
@@ -209,7 +219,7 @@ function renderMinimap() {
     }
   }
   // current layout
-  if (state.cfg.scene_only) {
+  if (state.task === 'pick_cube') {
     for (const [name, obj] of Object.entries(state.cfg.objects)) {
       const [x, y, yaw] = sc[name], w = obj.size[1] * MMK, h = obj.size[0] * MMK;
       const color = `rgb(${obj.rgba.slice(0, 3).map(v => Math.round(v * 255)).join(',')})`;

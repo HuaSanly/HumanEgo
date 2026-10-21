@@ -136,7 +136,7 @@ def test_runner_bread_geometry_in_world(perceived):
     """runner._perceived_geometry: what the grasp skill knows (centre, long axis, extent, place height)."""
     runner = pytest.importorskip("humanego_sim.runner")
     env, objs = perceived
-    fake = types.SimpleNamespace(env=env, cfg={}, anchor_key="obj1")
+    fake = types.SimpleNamespace(env=env, cfg={}, anchor_key="obj1", task="serve_bread")
     for side, name in (("right", "bread_right"), ("left", "bread_left")):
         g = runner.EpisodeRunner._perceived_geometry(fake, side, objs[side])
         (u, v), (a, b) = BREADS[name]

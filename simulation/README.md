@@ -51,29 +51,44 @@ Prop dimensions, masses, friction and initial `[x, y, yaw_deg]` poses are editab
 under `scene.objects`; the supplied values are simulation defaults, not measured
 real-world dimensions. The container has a bottom and four collision walls.
 
-This is a **physics scene preview**: the arms hold their existing start poses,
-no checkpoint is loaded, and no task success rate is reported. The released
-`serve_bread` policy and evaluation remain available through the default config.
+The default is a **closed-loop run of your trained pick_cube model**, using
+`runs/pick_cube/HumanEgo/latest.pt` and the `config.json` / `dataset_stats.json`
+next to it. It uses the right arm, as in training (`single_hand: true`,
+`camera_frame`, `absolute` actions). No public model download is needed. The
+robot, camera and production controller settings are inherited; bread-specific
+grasp refinement and plate-based idle completion are not used. Success requires
+the grasped block to be released, settled and fully inside the container.
 
 ```bash
-# Shared table texture only; the new props need no external meshes or textures.
+# Activate an environment containing the project's simulation dependencies.
+conda activate GlassEgo
 python simulation/scripts/build_assets.py --table-only
-python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --video
-python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --mode single \
-  --scene '{"container":[0.47,0,20],"cube":[0.46,-0.22,30]}' --duration 5 --video
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --video --out pick_cube_model
 
-# Add the preview to the local viewer, preserving previously built serve_bread entries.
+# Choose a different checkpoint and inference settings. --set values use JSON syntax.
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml \
+  --set 'policy.ckpt="./runs/pick_cube/HumanEgo/latest.pt"' \
+  --set policy.num_inference_steps=20 --set control.policy_period=0.3 \
+  --set control.max_episode_time=40 --device cuda --seed 0 --video
+
+# Run the trained model and export its rollout for the web viewer.
 python simulation/scripts/build_web.py --config simulation/configs/pick_cube.yaml
 python simulation/web/tools/serve.py 8791 simulation/web
 ```
 
-Open `http://127.0.0.1:8791/?task=pick_cube`, select **Live physics**, drag either
-prop in the initial-condition map (scroll to rotate), then press **Run physics**.
-The browser runs five seconds of physics without ONNX or policy downloads.
-Both one-arm and two-arm rigs are supported; use `--set 'mode="single"'` when
-building the web preview to add the one-arm version. Recorded previews and videos
-are saved under `simulation/runs/pick_cube_*`; the original scene remains the
-default whenever its standard web configuration is present.
+Open `http://127.0.0.1:8791/?task=pick_cube&mode=single` and press **Replay** to
+view the trained policy's predictions, input images and actual physics outcome.
+This is recorded Python inference; browser ONNX Live inference is not enabled
+for pick_cube. Videos and episode logs are in `simulation/runs/<out>/`.
+`--profile production` is the default; `tuned` profiles belong to serve_bread
+and are rejected for pick_cube. Use `--set` for your own inference/controller
+parameters. Same-seed reruns are intended for reproducing a run; task success
+must be measured rather than inferred from a model loading successfully.
+
+For geometry inspection only, add `--set scene_only=true --duration 5`; it skips
+the policy. Physics-only previews can also be built with
+`build_web.py --config simulation/configs/pick_cube.yaml --set scene_only=true`.
+Those retain the **Live physics** prop editor and may use either arm mode.
 
 ## Results
 

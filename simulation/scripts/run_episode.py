@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--video", action="store_true")
     ap.add_argument("--camera_view", default="front_view")
     ap.add_argument("--duration", type=float, default=5.0, help="physics preview duration (scene-only configs)")
+    ap.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     add_profile_arg(ap)
     args = ap.parse_args()
 
@@ -50,7 +51,7 @@ def main():
             cur = cur.setdefault(p, {})
         cur[parts[-1]] = json.loads(val)
     cfg = load_config(args.config, ov)
-    prefix = f"{cfg['task']}_" if cfg.get("scene_only") else ""
+    prefix = f"{cfg['task']}_" if cfg.get("task") != "serve_bread" else ""
     name = args.out or f"{prefix}{cfg['robot']}_{cfg['camera']}_{cfg['mode']}_s{args.seed}"
     log_dir = os.path.join(os.path.dirname(HERE), "runs", name)
     scene = json.loads(args.scene) if args.scene else None
@@ -63,7 +64,7 @@ def main():
             print("video:", render_episode_video(env, log_dir, camera=args.camera_view))
         return
     from humanego_sim.runner import EpisodeRunner
-    runner = EpisodeRunner(cfg)
+    runner = EpisodeRunner(cfg, device=args.device)
     res = runner.run(scene=scene, seed=args.seed, log_dir=log_dir)
     print(json.dumps({"success": res.success, "per_side": res.per_side, "duration": res.duration,
                       "wall": res.wall_time}, indent=1))

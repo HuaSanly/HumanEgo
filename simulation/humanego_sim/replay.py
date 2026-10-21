@@ -61,8 +61,9 @@ def render_episode_video(env, log_dir: str, out_path: str = None, camera: str = 
                 _put(main, f"policy input ({s}{', mirrored' if s == 'left' else ''})", (x + 6, y + 18), 0.45)
                 y += th + 6
         _put(main, f"t = {fr['t']:5.1f} s", (12, 28), 0.7)
-        caption = (f"HumanEgo {ep['meta']['task']} scene preview" if ep["meta"].get("scene_only")
-                   else "HumanEgo policy in simulation (released serve_bread checkpoint)")
+        task = ep["meta"].get("task", "serve_bread")
+        caption = (f"HumanEgo {task} scene preview" if ep["meta"].get("scene_only")
+                   else f"HumanEgo {task} policy in simulation")
         _put(main, caption, (12, H - 14), 0.5)
         writer.append_data(main[:, :, ::-1])
     writer.close()

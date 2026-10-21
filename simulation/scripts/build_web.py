@@ -65,7 +65,8 @@ def rollout_extras(env, log_dir, cfg):
     colors = {"obj1": "#22d3ee", "obj2": "#3ddc97"}
     for side, objs in meta["perception"].items():
         for k, v in objs.items():
-            body = f"bread_{side}" if k == "obj1" else "plate"
+            roles = env.meta.get("object_roles")
+            body = roles[k][0] if roles else (f"bread_{side}" if k == "obj1" else "plate")
             if body in kpts:
                 continue
             Ts = np.array(v["T_obj_in_cam_static"])
@@ -131,22 +132,34 @@ def _git_rev():
         return None
 
 
-def build_preview(cfg):
+def build_task_config(cfg, seed=0):
     from humanego_sim.scene_preview import record_scene
     key = f"{cfg['task']}_{cfg['robot']}_{cfg['camera']}_{cfg['mode']}"
-    env = ServeBreadSim(cfg, render=False)
+    preview = bool(cfg.get("scene_only"))
+    env = ServeBreadSim(cfg, seed=seed, render=not preview)
     log_dir = os.path.join(LOG_ROOT, key, "ep000")
-    record_scene(env, log_dir)
+    if preview:
+        record_scene(env, log_dir)
+    else:
+        from humanego_sim.runner import EpisodeRunner
+        EpisodeRunner(cfg, env=env).run(seed=seed, log_dir=log_dir)
     export_model(env, WEB, key)
-    export_live(env, WEB, key)
+    if preview:
+        export_live(env, WEB, key)
     rid = f"{key}_000"
     ro = export_rollout(env, log_dir, WEB, rid)
     ro.update(model=key, kpts={}, appear={}, look_ahead=int(cfg["control"]["look_ahead_offset"]))
+    if not preview:
+        ro.update(rollout_extras(env, log_dir, cfg))
     with open(os.path.join(WEB, "data", "rollouts", f"{rid}.json"), "w") as f:
         json.dump(ro, f, separators=(",", ":"))
+    if env.renderer is not None:
+        env.renderer.close()
     return {"robot": cfg["robot"], "camera": cfg["camera"], "mode": cfg["mode"], "task": cfg["task"],
-            "model": key, "scene_only": True, "objects": cfg["scene"]["objects"],
-            "rollouts": [{"id": rid, "scene": ro["scene"], "per_side": {}, "success": None}]}
+            "model": key, "scene_only": preview, "objects": cfg["scene"]["objects"],
+            "policy": cfg["policy"],
+            "rollouts": [{"id": rid, "scene": ro["scene"], "per_side": ro["result"]["per_side"],
+                          "success": ro["result"]["success"]}]}
 
 
 def write_manifest(configs, tuning_robot="trossen_wxai", media=None):
@@ -160,7 +173,8 @@ def write_manifest(configs, tuning_robot="trossen_wxai", media=None):
                                                 c["mode"] != "bimanual"))
     for c in cfgs:
         c["live"] = os.path.exists(os.path.join(WEB, "assets", "live", c["model"], "spec.json")) and \
-            (c.get("scene_only") or os.path.exists(os.path.join(WEB, "assets", "policy", "serve_bread_meta.json")))
+            (c.get("scene_only") or (c.get("task", "serve_bread") == "serve_bread" and
+                                    os.path.exists(os.path.join(WEB, "assets", "policy", "serve_bread_meta.json"))))
         # refresh the quoted numbers from configs/tuned (same parameters: same autotune run), e.g. after
         # the reserved test set was run on a kept build (rebuild_site.py --skip-build)
         p = c.get("profile")
@@ -181,8 +195,9 @@ def write_manifest(configs, tuning_robot="trossen_wxai", media=None):
     default = dict(DEFAULT, task="serve_bread")
     if not any(c.get("task", "serve_bread") == "serve_bread" and
                all(c[k] == DEFAULT[k] for k in DEFAULT) for c in cfgs):
-        default = {k: cfgs[0][k] for k in ("robot", "camera", "mode")}
-        default["task"] = cfgs[0].get("task", "serve_bread")
+        first = next((c for c in cfgs if not c.get("scene_only")), cfgs[0])
+        default = {k: first[k] for k in ("robot", "camera", "mode")}
+        default["task"] = first.get("task", "serve_bread")
     man = web_manifest.assemble(cfgs, {k: v.label for k, v in ROBOTS.items()},
                                 {k: v.label for k, v in CAMERAS.items()}, default, tuning, extra)
     with open(man_p, "w") as f:
@@ -205,7 +220,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--configs", default="trossen_wxai:realsense_d405:bimanual",
                     help="comma-separated robot:camera:mode[:n[:profile]]")
-    ap.add_argument("--config", help="scene-only YAML to add as a physics preview, without running the policy")
+    ap.add_argument("--config", help="pick_cube YAML: run its trained policy, or preview with scene_only=true")
     ap.add_argument("--n", type=int, default=24)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--seed", type=int, default=2026)
@@ -226,9 +241,9 @@ def main(argv=None):
     built = []
     if args.config and not args.manifest_only:
         cfg = load_config(args.config, deep_update(overrides, {"profile": args.profile}))
-        if not cfg.get("scene_only"):
-            ap.error("--config expects a scene-only config; use --configs for policy rollouts")
-        built.append(build_preview(cfg))
+        if cfg.get("task") != "pick_cube":
+            ap.error("--config expects pick_cube.yaml; use --configs for serve_bread rollouts")
+        built.append(build_task_config(cfg, args.seed))
     elif not args.manifest_only:
         for spec in args.configs.split(","):
             robot, camera, mode, n, profile = parse_spec(spec, args.n, args.profile)

@@ -91,6 +91,9 @@ class EpisodeRunner:
             raise ValueError("This config is a scene preview; use scripts/run_episode.py --config <path> "
                              "to record physics without the serve_bread policy or success metric")
         self.cfg = cfg
+        self.task = cfg.get("task", "serve_bread")
+        if self.task == "pick_cube" and cfg.get("mode") != "single":
+            raise ValueError("pick_cube has one cube and uses the trained right-hand policy; choose --mode single")
         self.device = device
         self.env = env or ServeBreadSim(cfg)
         self.policy = policy or load_policy(cfg, device)
@@ -114,6 +117,9 @@ class EpisodeRunner:
         # and at every control tick, the perception, every policy call and every controller command
         self.trace: Optional[dict] = None
 
+    def _manipulated_body(self, side: str) -> str:
+        return "cube" if self.task == "pick_cube" else f"bread_{side}"
+
     # ------------------------------------------------------------------
     def _seed_policy_noise(self, seed: int):
         g = torch.Generator(device="cpu").manual_seed(int(seed))
@@ -134,7 +140,7 @@ class EpisodeRunner:
                 "ee": arm.get_p_in_cam().tolist(), "g_to": float(arm._g_to), "g_cmd": float(arm.g_cmd),
                 "skill": gs["state"], "tries": int(gs["tries"]), "wrap": ctxs[s].wrap_phase if s in ctxs else None,
                 "grasping": bool(ctxs[s].hand["is_grasping"]) if s in ctxs else False,
-                "n_events": len(controller.events[s]), "bread": env.object_pos(f"bread_{s}").tolist(),
+                "n_events": len(controller.events[s]), "bread": env.object_pos(self._manipulated_body(s)).tolist(),
                 "goal": arm.cinterp.p_goal.tolist(), "mode": arm.mode}
         return out
 
@@ -149,6 +155,8 @@ class EpisodeRunner:
     def _perceived_geometry(self, side: str, so) -> dict:
         """What the robot knows about the scene from its own perception at t = 0 (world frame):
         bread centre / long axis / extent from its keypoints, and a place height over the plate."""
+        if self.task == "pick_cube":
+            return {}                         # bread grasp refinement and plate placement do not apply
         env, out = self.env, {}
         Tcw = env.T_cam_in_world
         pts = {}
@@ -281,6 +289,8 @@ class EpisodeRunner:
             ctx.forced_lift_anchor_p_base = arm.get_p()[:3].copy()
             best, bd = None, float("inf")
             for ok, To in so.dynamic_obj_poses.items():
+                if self.task == "pick_cube" and ok != "obj2":
+                    continue                  # obj1 is the fixed container, not the manipulated block
                 dd = float(np.linalg.norm(Tv[:3, 3] - To[:3, 3]))
                 if dd < bd:
                     best, bd = ok, dd
@@ -297,7 +307,7 @@ class EpisodeRunner:
             so.dynamic_obj_poses[st["latched_obj"]] = Tv @ st["T_lock_h2obj"]
 
         # ---- idle-done (release over the plate) ----
-        if self.cc.get("use_idle_done", False) and st["is_grasping"]:
+        if self.task != "pick_cube" and self.cc.get("use_idle_done", False) and st["is_grasping"]:
             if ctx.grasp_start_time is None:
                 ctx.grasp_start_time = t
             if t - ctx.grasp_start_time >= float(self.cc.get("idle_time_limit", 3.0)):
@@ -362,14 +372,15 @@ class EpisodeRunner:
         """Objects appear in mid-air one after another and fall onto the table under physics.
         Recorded with negative time stamps, before perception runs at t = 0."""
         env = self.env
-        names = ["plate"] + sorted(n for n in env.obj_names if n != "plate")
+        target = "container" if self.task == "pick_cube" else "plate"
+        names = [target] + sorted(n for n in env.obj_names if n != target)
         rest = {n: np.asarray(env.object_pose7(n)) for n in names}
         release = {n: 0.15 + 0.22 * i for i, n in enumerate(names)}
         air = {}
         for n in names:
             q = rest[n].copy()
-            q[2] += rng.uniform(*drop_h) if n != "plate" else 0.035
-            if n != "plate":   # a little tilt so the landing looks natural
+            q[2] += rng.uniform(*drop_h) if n != target else 0.035
+            if n != target:   # a little tilt so the landing looks natural
                 from scipy.spatial.transform import Rotation as R
                 r0 = R.from_quat([q[4], q[5], q[6], q[3]])
                 r1 = R.from_euler("xy", rng.uniform(-12, 12, 2), degrees=True) * r0
@@ -586,7 +597,7 @@ class EpisodeRunner:
                 next_rec += rec_dt
             env.step()
             for s in sides:
-                bz = env.object_pos(f"bread_{s}")[2]
+                bz = env.object_pos(self._manipulated_body(s))[2]
                 if bz > self._bread_max_z.get(s, 0.0):
                     self._bread_max_z[s] = float(bz)
             if all(c.wrap_phase == "finished" for c in ctxs.values()):
@@ -621,6 +632,8 @@ class EpisodeRunner:
         """Success = the bread was released and rests on the plate: its centre is over the plate and
         no part of it touches the table (the plate's floor sits 8.5 mm above the table top)."""
         env = self.env
+        if self.task == "pick_cube":
+            return self._evaluate_pick_cube(ctxs)
         Tp = env.body_T_world("plate")
         R_plate = env.meta["objects"]["plate"]["R"]
         out = {}
@@ -638,10 +651,43 @@ class EpisodeRunner:
                       "done_reason": ctx.done_reason or "timeout"}
         return out
 
+    def _evaluate_pick_cube(self, ctxs: Dict[str, SideCtx]) -> Dict[str, dict]:
+        env = self.env
+        props = self.cfg["scene"]["objects"]
+        half = np.asarray(props["cube"]["size"]) / 2
+        corners = np.array([[x, y, z] for x in (-half[0], half[0])
+                            for y in (-half[1], half[1]) for z in (-half[2], half[2])])
+        relative = np.linalg.inv(env.body_T_world("container")) @ env.body_T_world("cube")
+        local = corners @ relative[:3, :3].T + relative[:3, 3]
+        container_half = np.asarray(props["container"]["size"]) / 2
+        wall = props["container"]["wall"]
+        inside = (np.all(np.abs(local[:, :2]) <= container_half[:2] - wall + 0.001)
+                  and local[:, 2].min() >= -container_half[2] + wall - 0.003
+                  and local[:, 2].max() <= container_half[2] + 0.003)
+        da = env.obj_free_dadr["cube"]
+        speed = float(np.linalg.norm(env.d.qvel[da:da + 3]))
+        settled = speed < 0.05 and np.linalg.norm(env.d.qvel[da + 3:da + 6]) < 0.5
+        out = {}
+        for side, ctx in ctxs.items():
+            released = not env.arms[side].gripper_cmd_closed()
+            grasped = bool(ctx.hand["has_ever_grasped"])
+            out[side] = {"success": bool(inside and settled and released and grasped),
+                         "inside_container": bool(inside), "released": released, "grasped": grasped,
+                         "settled": bool(settled), "cube_speed": round(speed, 4),
+                         "cube_z": round(float(env.object_pos("cube")[2]), 4),
+                         "cube_max_z": round(getattr(self, "_bread_max_z", {}).get(side, 0.0), 4),
+                         "dist_to_container_center": round(float(np.linalg.norm(relative[:2, 3])), 4),
+                         "done_reason": ctx.done_reason or "timeout"}
+        return out
+
     def _save(self, log_dir, frames, policy_log, res, scene, side_objs):
         env = self.env
         meta = dict(env.meta)
-        meta["scene_init"] = scene or env.default_scene()
+        meta["task"] = self.task
+        meta["scene_only"] = False
+        meta["policy"] = dict(self.cfg["policy"])
+        meta["scene_init"] = env.default_scene()
+        meta["scene_init"].update(scene or {})
         meta["result"] = {"success": res.success, "per_side": res.per_side, "duration": res.duration}
         meta["perception"] = {s: {k: {"T_obj_in_cam_static": np.round(v["T_obj_in_cam_static"], 5).tolist(),
                                       "kpts_local": np.round(v["kpts_local"], 5).tolist()}

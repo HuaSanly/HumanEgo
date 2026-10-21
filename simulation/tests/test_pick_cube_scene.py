@@ -20,12 +20,15 @@ def env():
     return ServeBreadSim(load_config(CONFIG), render=False)
 
 
-def test_rig_and_control_inherit_original_defaults():
+def test_pick_cube_selects_trained_policy_and_preserves_rig_and_control():
     original, cube = load_config(), load_config(CONFIG)
-    for key in ("rig", "robot", "camera", "mode", "policy", "control", "perception"):
+    for key in ("rig", "robot", "camera", "control", "perception"):
         assert cube[key] == original[key]
-    assert cube["scene_only"]
+    assert not cube["scene_only"] and cube["mode"] == "single"
+    assert cube["policy"]["ckpt"] == "./runs/pick_cube/HumanEgo/latest.pt"
     assert original["task"] == "serve_bread" and "scene_only" not in original
+    with pytest.raises(ValueError, match="tuned profiles are for serve_bread"):
+        load_config(CONFIG, {"profile": "tuned"})
 
 
 @pytest.mark.parametrize("mode", ["single", "bimanual"])
@@ -67,12 +70,12 @@ def test_scene_recording_and_web_export(env, tmp_path):
     episode = json.loads((tmp_path / "run" / "episode.json").read_text())
     assert episode["policy"] == [] and len(episode["frames"]) > 1
     model = export_model(env, str(tmp_path), "pick_cube_test")
-    assert model["scene_only"] and model["task"] == "pick_cube"
+    assert not model["scene_only"] and model["task"] == "pick_cube"
     assert set(model["objects"]) == {"container", "cube"}
     assert {g["type"] for g in model["geoms"] if g["group"] == 2} == {"box"}
     live_dir = export_live(env, str(tmp_path), "pick_cube_test")
     spec = json.load(open(os.path.join(live_dir, "spec.json")))
-    assert spec["scene_only"] and spec["object_roles"] == {"obj1": ["container"], "obj2": ["cube"]}
+    assert not spec["scene_only"] and spec["object_roles"] == {"obj1": ["container"], "obj2": ["cube"]}
     physics = mujoco.MjModel.from_xml_path(os.path.join(live_dir, "scene.xml"))
     assert physics.nq == env.m.nq
     ro = export_rollout(env, log_dir, str(tmp_path), "pick_cube_test_000")
@@ -86,6 +89,56 @@ def test_scene_recording_and_web_export(env, tmp_path):
     man = web_manifest.assemble([cfg], {env.robot.name: "Trossen"}, {env.cam.name: "D405"}, default, None)
     assert web_manifest.validate(man) == []
     assert man["summary"] == []
+
+
+def test_pick_cube_success_uses_full_container_interior(env):
+    from humanego_sim.runner import EpisodeRunner, SideCtx
+    from humanego_sim.perception import SideObjects
+    runner = EpisodeRunner.__new__(EpisodeRunner)
+    runner.cfg, runner.env, runner.task = env.cfg, env, "pick_cube"
+    ctx = SideCtx("right", False, SideObjects())
+    env.reset({"container": [0.47, 0, 30]})
+    env.place_object("cube", [0.47, 0, 0.15, 1, 0, 0, 0])
+    mujoco.mj_forward(env.m, env.d)
+    env.step(round(1.5 / env.dt))
+    assert not runner.evaluate({"right": ctx})["right"]["success"]  # no grasp occurred
+    ctx.hand["has_ever_grasped"] = True
+    assert runner.evaluate({"right": ctx})["right"]["success"]
+    # Centre is inside, but a corner is on the wall: this is not a completed placement.
+    target = env.body_T_world("container")
+    pos = target[:3, :3] @ np.array([0.075, 0, -0.011]) + target[:3, 3]
+    env.place_object("cube", [*pos, 1, 0, 0, 0])
+    mujoco.mj_forward(env.m, env.d)
+    assert not runner.evaluate({"right": ctx})["right"]["inside_container"]
+
+
+@pytest.mark.sim
+def test_local_pick_cube_checkpoint_runs_closed_loop(tmp_path):
+    from humanego_sim.env import REPO_ROOT
+    ckpt = os.path.join(REPO_ROOT, "runs", "pick_cube", "HumanEgo", "latest.pt")
+    if not os.path.exists(ckpt):
+        pytest.skip("local trained pick_cube checkpoint not present")
+    import torch
+    from humanego_sim.runner import EpisodeRunner
+    cfg = load_config(CONFIG, {"control": {"max_episode_time": 2.0}})
+    try:
+        env = ServeBreadSim(cfg)
+    except Exception as e:
+        pytest.skip(f"no OpenGL context: {e!r}")
+    try:
+        runner = EpisodeRunner(cfg, env=env, device="cuda" if torch.cuda.is_available() else "cpu")
+        initial = np.asarray(env.initial_joints("right"))
+        result = runner.run(log_dir=str(tmp_path), verbose=False, intro=False)
+        assert result.n_policy_steps >= 5
+        assert np.linalg.norm(env.arms["right"].get_j() - initial) > 0.05
+        assert "inside_container" in result.per_side["right"]
+        assert "dist_to_plate_center" not in result.per_side["right"]
+        ep = json.loads((tmp_path / "episode.json").read_text())
+        assert ep["meta"]["policy"]["ckpt"] == cfg["policy"]["ckpt"]
+        assert ep["meta"]["task"] == "pick_cube" and not ep["meta"]["scene_only"]
+        assert set(ep["frames"][0]["objects"]) == {"container", "cube"}
+    finally:
+        env.renderer.close()
 
 
 @pytest.mark.sim

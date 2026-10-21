@@ -2,14 +2,18 @@
 # defaults in metres, not measurements of the real pick_cube props.
 base_config: serve_bread.yaml
 task: pick_cube
-scene_only: true
+scene_only: false
+mode: single
+
+policy:
+  ckpt: ./runs/pick_cube/HumanEgo/latest.pt
 
 scene:
   objects:
     container:
       kind: container
       role: obj1
-      pose: [0.47, 0.00, 0.0]
+      pose: [0.47, 0.10, 0.0]
       size: [0.18, 0.14, 0.07]
       wall: 0.004
       mass: 0.20
@@ -18,7 +22,7 @@ scene:
     cube:
       kind: cube
       role: obj2
-      pose: [0.46, -0.27, 0.0]
+      pose: [0.47, -0.15, 0.0]
       size: [0.04, 0.04, 0.04]
       mass: 0.05
       friction: [0.4, 0.01, 0.001]

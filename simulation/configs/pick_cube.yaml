@@ -18,7 +18,7 @@ scene:
       wall: 0.004
       mass: 0.20
       friction: [0.4, 0.01, 0.001]
-      rgba: [0.529, 0.808, 0.922, 1.0]
+      rgba: [0.08, 0.30, 0.85, 1.0]
     cube:
       kind: cube
       role: obj2

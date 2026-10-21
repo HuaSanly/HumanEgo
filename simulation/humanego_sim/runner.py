@@ -77,7 +77,7 @@ class EpisodeResult:
 
 def load_policy(cfg: dict, device: str = "cuda") -> ICTPolicy:
     pc = cfg["policy"]
-    ckpt = pc["ckpt"]
+    ckpt = os.path.expanduser(pc["ckpt"])
     if not os.path.isabs(ckpt):
         ckpt = os.path.normpath(os.path.join(REPO_ROOT, ckpt))
     torch.manual_seed(int(pc.get("seed", 0)))

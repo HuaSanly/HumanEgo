@@ -5,6 +5,7 @@ import os
 import mujoco
 import numpy as np
 import pytest
+import yaml
 
 from humanego_sim.env import SIM_ROOT, ServeBreadSim, load_config
 from humanego_sim.live_export import export_live
@@ -22,10 +23,12 @@ def env():
 
 def test_pick_cube_selects_trained_policy_and_preserves_rig_and_control():
     original, cube = load_config(), load_config(CONFIG)
-    for key in ("rig", "robot", "camera", "control", "perception"):
+    for key in ("rig", "robot", "camera", "perception"):
         assert cube[key] == original[key]
+    assert cube["control"] == dict(original["control"], grasp_threshold=0.7)
     assert not cube["scene_only"] and cube["mode"] == "single"
-    assert cube["policy"]["ckpt"] == "./runs/pick_cube/HumanEgo/latest.pt"
+    with open(CONFIG) as stream:
+        assert cube["policy"]["ckpt"] == yaml.safe_load(stream)["policy"]["ckpt"]
     assert original["task"] == "serve_bread" and "scene_only" not in original
     with pytest.raises(ValueError, match="tuned profiles are for serve_bread"):
         load_config(CONFIG, {"profile": "tuned"})

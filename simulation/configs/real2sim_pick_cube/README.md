@@ -1,7 +1,8 @@
 # pick_cube 的 Real2Sim 消融配置
 
 这些配置来自 2026-10-23 的工作区快照，保留该时刻的模型与控制器设置。
-不修改 `pick_cube.yaml` 或 `serve_bread.yaml`。
+后续按用户要求统一将抓取阈值设为 0.7，同时在 `pick_cube.yaml` 增加任务级覆盖；
+原始 0.75 版本和结果仍保留在实验目录，`serve_bread.yaml` 保留用户原有设置。
 
 | 配置 | 变化 |
 |---|---|
@@ -24,7 +25,7 @@ python simulation/scripts/run_episode.py --config simulation/configs/real2sim_pi
 
 # 重新统计与拟合，使用新的输出目录；A 从当前 pick_cube 配置保存。
 python simulation/scripts/real2sim_calibrate.py --output simulation/runs/my_real2sim
-python simulation/scripts/real2sim_ablation.py --output simulation/runs/my_real2sim --n 100 --workers 3
+python simulation/scripts/real2sim_ablation.py --output simulation/runs/my_real2sim --n 10 --workers 3
 # 同样参数重新运行会跳过已落盘的试验；执行错误保留在 result.json，单独统计。
 ```
 
@@ -37,6 +38,13 @@ python simulation/scripts/real2sim_ablation.py --output simulation/runs/my_real2
 - `episodes/{A,B,C,D,E}/epNNN/`：每次完整轨迹、终态、配置与结果；前两次还保存策略输入图。
 - `comparison.png`、`visual_metrics.json`：名义场景与训练参考的实际模型输入对比。
 - `summary.json`、`report.md`：严格成功率、物理里程碑、Wilson 区间、配对 bootstrap 与 Holm 校正。
+
+每组默认运行 10 次。用户将原先 100 次的计划缩减为 10 次后，按预先编号选取
+每组 `ep000`–`ep009`，不按成功或失败筛选；已多跑的结果保存在 `extra_trials/`，
+原计划保留在 `protocol_history.json`。10 次结果用于初步比较，置信区间会较宽。
+
+阈值 0.7 的重新评估在 `simulation/runs/real2sim_ablation_20261023/threshold_0p7/`，
+仍为 A–E 各 10 次，场景编号与随机种子与 0.75 轮次相同。
 
 恢复原始设置时，可从 `baseline/simulation/configs/` 复制两份 YAML；
 原始仿真源码在 `baseline/simulation/humanego_sim/`，完整资产在 `baseline/assets/`。

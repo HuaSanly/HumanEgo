@@ -25,7 +25,7 @@ from humanego_sim.stats import paired, wilson
 WORKER = {}
 
 
-def write_json(path: Path, data: dict) -> None:
+def write_json(path: Path, data: dict | list) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(data, indent=2))
     temporary.replace(path)
@@ -139,7 +139,8 @@ def render_comparison(root: Path) -> dict:
 
 
 def report(root: Path, n: int) -> None:
-    groups = {label: [json.loads(p.read_text()) for p in sorted((root / "episodes" / label).glob("*/result.json"))] for label in "ABCDE"}
+    groups = {label: [json.loads(p.read_text()) for p in sorted((root / "episodes" / label).glob("*/result.json"))
+                      if int(p.parent.name.removeprefix("ep")) < n] for label in "ABCDE"}
     visual = json.loads((root / "visual_metrics.json").read_text())["metrics"]
     summary = {}
     for label, rows in groups.items():
@@ -167,7 +168,8 @@ def report(root: Path, n: int) -> None:
         comparisons[key]["holm_p"] = adjusted
         previous = adjusted
     write_json(root / "summary.json", {"planned_per_group": n, "groups": summary, "paired": comparisons})
-    lines = ["# pick_cube Real2Sim A–E 消融实验", "", "固定 checkpoint、控制器、推理步数和每个配对场景的推理噪声。",
+    lines = ["# pick_cube Real2Sim A–E 消融实验", "", f"每组预先编号的前 {n} 个场景；超过该范围的试验不进入统计。", "",
+             "固定 checkpoint、控制器、推理步数和每个配对场景的推理噪声。",
              "A–D 共用位置 ±1.5 cm、yaw ±8° 的标准化扰动；几何组使用各自拟合的名义布局，因此绝对坐标并不相同。",
              "E 在 D 上额外改变相机高度 ±2 cm、俯角 ±3°、光强 ±8%、色调 ±0.025；实体尺寸、质量和摩擦保持固定。", "",
              "| 组 | 完成/计划 | 执行错误 | 成功（95% Wilson CI） | 抬起 | 搬运 | 最终在盒内 | 输入几何 MAE | 物体 RGB MAE |",
@@ -188,13 +190,54 @@ def report(root: Path, n: int) -> None:
               "- A–D 含尺寸、构图和接触形状的几何因素；C 的效果不能单独归因于相机。E 衡量额外扰动的稳健性，不代表重新训练。",
               "- 当前仅在本地可用训练 episode 上拟合；该实验是固定场景分布的仿真比较，不能直接推断真实部署成功率。",
               "- 无论结果如何，不修改控制器或按结果重新选择场景。原始配置保留在 baseline/，每次试验保存 episode.json 和 result.json。", ""]
+    diagnostics = grasp_diagnostics(root, n)
+    if diagnostics:
+        threshold = next(iter(diagnostics.values()))["threshold"]
+        cutoff = np.log(threshold / (1 - threshold))
+        lines += ["## 抓取解码诊断", "", "训练 dataloader 把 grasp 目标直接二值化为 0/1，flow matching 在该空间学习；当前推理对积分后的 grasp 分量施加 sigmoid。",
+                  f"所以理想正例 1 会变成 0.7311，而冻结的抓取阈值是 {threshold:g}，相当于要求原始 flow 输出超过 {cutoff:.4f}。",
+                  "当阈值高于 0.7311 时，理想正例也不能触发闭合；更低的阈值允许部分正例触发。所有组统一使用该轮冻结的解码和阈值。", "",
+                  f"| 组 | 记录到的最大抓取输出 | 曾超过当前阈值的试验 | 仅逆变换后超过 {threshold:g} 的试验 |", "|---|---:|---:|---:|"]
+        for label, value in diagnostics.items():
+            lines.append(f"| {label} | {value['max_decoded_grasp']:.3f} | {value['current_gate_trials']}/{value['n']} | {value['raw_gate_trials']}/{value['n']} |")
+        lines += ["", "最后一列仅对已记录的预测做逆 sigmoid 诊断，不是修复后的闭环成功率。应先统一修正训练/推理解码语义，再独立复测，不能把本轮失败全部归因于视觉域差异。", ""]
+    if all(value["valid"] == n and value["successes"] == 0 for value in summary.values()):
+        lines += ["## 本轮结论", "", "五组均未观察到严格任务成功。外观和构图指标改善尚未转化为本轮闭环成功。",
+                  f"每组只有 {n} 次且没有成功事件，无法据此确定组间等效或场景改造无效；零差值的配对 bootstrap 会退化为 [0,0]，不应解释为真实效果没有不确定性。", ""]
     (root / "report.md").write_text("\n".join(lines))
+
+
+def grasp_diagnostics(root: Path, n: int) -> dict:
+    diagnostics = {}
+    path = root / "A.yaml"
+    threshold = float(load_config(str(path))["control"]["grasp_threshold"]) if path.exists() else 0.75
+    for label in "ABCDE":
+        maxima = []
+        for index in range(n):
+            path = root / "episodes" / label / f"ep{index:03d}" / "episode.json"
+            if not path.exists():
+                continue
+            episode = json.loads(path.read_text())
+            values = [np.asarray(step["sides"]["right"]["grasp"]).max() for step in episode["policy"]]
+            if values:
+                maxima.append(float(max(values)))
+        if maxima:
+            values = np.asarray(maxima)
+            raw = np.log(np.clip(values, 1e-6, 1 - 1e-6) / np.clip(1 - values, 1e-6, 1))
+            diagnostics[label] = {"n": len(values), "max_decoded_grasp": float(values.max()),
+                                  "threshold": threshold,
+                                  "median_max_decoded_grasp": float(np.median(values)),
+                                  "current_gate_trials": int((values > threshold).sum()),
+                                  "raw_gate_trials": int((raw > threshold).sum())}
+    if diagnostics:
+        write_json(root / "grasp_diagnostics.json", diagnostics)
+    return diagnostics
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--n", type=int, default=100)
+    parser.add_argument("--n", type=int, default=10)
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20261023)
     parser.add_argument("--device", default="cuda")
@@ -211,8 +254,16 @@ def main() -> None:
                 "config_sha256": {label: hashlib.sha256((args.output / f"{label}.yaml").read_bytes()).hexdigest() for label in "ABCDE"},
                 "groups": {"A": "frozen current scene", "B": "appearance only", "C": "geometry, layout and camera only", "D": "B+C", "E": "D + bounded view/light variation"}}
     manifest = args.output / "protocol.json"
-    if manifest.exists() and json.loads(manifest.read_text()) != protocol:
-        raise ValueError("protocol/config changed; choose a new output directory")
+    if manifest.exists():
+        previous = json.loads(manifest.read_text())
+        fixed_keys = ("seed", "intro", "config_sha256", "groups")
+        if any(previous[key] != protocol[key] for key in fixed_keys):
+            raise ValueError("protocol/config changed; choose a new output directory")
+        if previous != protocol:
+            history = args.output / "protocol_history.json"
+            revisions = json.loads(history.read_text()) if history.exists() else []
+            revisions.append(previous)
+            write_json(history, revisions)
     write_json(manifest, protocol)
     jobs = [(label, index, args.seed) for label in "ABCDE" for index in range(args.n)
             if not (args.output / "episodes" / label / f"ep{index:03d}" / "result.json").exists()]

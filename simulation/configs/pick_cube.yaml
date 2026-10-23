@@ -31,3 +31,6 @@ scene:
 physics:
   bread_model: rigid
   finger_adhesion: 0.0
+
+control:
+  grasp_threshold: 0.7

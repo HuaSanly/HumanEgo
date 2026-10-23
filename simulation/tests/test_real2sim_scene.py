@@ -1,5 +1,6 @@
 """Physical and camera invariants needed for the appearance/geometry ablation."""
 import os
+import json
 from types import SimpleNamespace
 
 import mujoco
@@ -111,3 +112,22 @@ def test_ablation_pairing_and_bounded_randomization_do_not_mutate_configs():
     assert abs(second["rig"]["camera_pose"]["pitch_deg"] - 49) <= 3
     assert 0.92 <= variation["light"]["intensity"] <= 1.08
     assert varied["rig"]["camera_pose"]["position"][2] == 0.53
+
+
+def test_report_uses_requested_prefix_instead_of_extra_completed_trials(tmp_path):
+    from real2sim_ablation import report
+    visual = {label: {"geometry_mae": 0.01, "object_rgb_mae": 1} for label in "ABCDE"}
+    (tmp_path / "visual_metrics.json").write_text(json.dumps({"metrics": visual}))
+    for label in "ABCDE":
+        for index in range(11):
+            path = tmp_path / "episodes" / label / f"ep{index:03d}"
+            path.mkdir(parents=True)
+            value = {"idx": index, "success": index == 10, "physical_lift": False, "physical_transport": False,
+                     "per_side": {"right": {"success": index == 10, "grasped": False, "inside_container": False,
+                                             "dist_to_container_center": 0.2}}}
+            (path / "result.json").write_text(json.dumps(value))
+    report(tmp_path, 10)
+    result = json.loads((tmp_path / "summary.json").read_text())
+    for group in result["groups"].values():
+        assert group["completed"] == group["valid"] == 10
+        assert group["successes"] == 0

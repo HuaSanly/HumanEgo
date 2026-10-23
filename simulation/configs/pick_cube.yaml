@@ -1,6 +1,6 @@
-# Calibrated D scene: appearance, geometry and observation camera.
+# Calibrated D scene with the validated grasp controller and reachable cube pose.
 # Original scene snapshots remain in real2sim_pick_cube/A.yaml and simulation/runs/.
-base_config: real2sim_pick_cube/D.yaml
+base_config: pick_cube_grasp/recommended.yaml
 
 policy:
   ckpt: ./runs/pick_cube/server_0.1/latest.pt

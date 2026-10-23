@@ -24,7 +24,13 @@ def env():
 
 def test_default_pick_cube_selects_calibrated_D_scene():
     original, cube = load_config(), load_config(DEFAULT_CONFIG)
-    assert cube == load_config(os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "D.yaml"))
+    d_scene = load_config(os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "D.yaml"))
+    assert cube == load_config(os.path.join(SIM_ROOT, "configs", "pick_cube_grasp", "recommended.yaml"))
+    for key in ("appearance", "camera", "camera_intrinsics", "rig", "physics"):
+        assert cube[key] == d_scene[key]
+    for name, obj in cube["scene"]["objects"].items():
+        assert {k: v for k, v in obj.items() if k != "pose"} == {
+            k: v for k, v in d_scene["scene"]["objects"][name].items() if k != "pose"}
     assert cube["scene"]["objects"]["container"]["shape"] == "rounded"
     assert cube["control"]["grasp_threshold"] == 0.7
     assert not cube["scene_only"] and cube["mode"] == "single"

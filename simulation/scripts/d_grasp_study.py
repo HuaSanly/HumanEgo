@@ -178,7 +178,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261023)
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--config", default="simulation/configs/pick_cube.yaml")
+    parser.add_argument("--config", default="simulation/configs/real2sim_pick_cube/D.yaml")
     parser.add_argument("--variants", type=Path, default=Path("simulation/configs/pick_cube_grasp/round1.json"))
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()

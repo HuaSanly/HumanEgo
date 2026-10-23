@@ -174,9 +174,10 @@ class EpisodeRunner:
         """What the robot knows about the scene from its own perception at t = 0 (world frame):
         bread centre / long axis / extent from its keypoints, and a place height over the plate."""
         pick_cube = self.task == "pick_cube"
-        assist = self.cc.get("grasp_assist", {})
-        if pick_cube and not (assist.get("enabled") and assist.get("refine", True)):
-            return {}
+        if pick_cube:
+            assist = self.cc.get("grasp_assist", {})
+            if not (assist.get("enabled") and assist.get("refine", True)):
+                return {}
         env, out = self.env, {}
         Tcw = env.T_cam_in_world
         pts = {}

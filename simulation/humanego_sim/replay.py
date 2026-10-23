@@ -17,13 +17,11 @@ def _put(img, text, org, scale=0.55, color=(255, 255, 255), thick=1):
 
 
 def render_episode_video(env, log_dir: str, out_path: str = None, camera: str = "front_view",
-                         size=(960, 720), fps: float = 30, show_policy: bool | None = None):
-    """Replay logged physics; keep pick-cube's grasp visible without an inset by default."""
+                         size=(960, 720), fps: float = 30, show_policy: bool = True):
+    """Replay logged physics with the policy input inset visible by default."""
     with open(os.path.join(log_dir, "episode.json")) as f:
         ep = json.load(f)
     task = ep["meta"].get("task", "serve_bread")
-    if show_policy is None:
-        show_policy = task != "pick_cube"
     frames, plog = ep["frames"], ep["policy"] if show_policy else []
     out_path = out_path or os.path.join(log_dir, "episode.mp4")
     W, H = size

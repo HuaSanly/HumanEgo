@@ -87,6 +87,17 @@ def test_refine_projects_onto_the_bread():
     assert not arm.closed
 
 
+def test_refine_can_hold_a_reachable_world_grasp_orientation():
+    from scipy.spatial.transform import Rotation as R
+    ctl, arm, chunk = make(ga={**GA, "orientation_world_rpy_deg": [180, 0, 180]})
+    ctl.T_cam_in_world = np.eye(4)
+    ctl.T_cam_in_world[:3, :3] = R.from_euler("y", 40, degrees=True).as_matrix()
+    refined_target = ctl._refine("right", np.asarray(chunk[0]))
+    actual_world = ctl.T_cam_in_world[:3, :3] @ R.from_rotvec(refined_target[3:]).as_matrix()
+    expected = R.from_euler("xyz", [180, 0, 180], degrees=True).as_matrix()
+    np.testing.assert_allclose(actual_world, expected, atol=1e-12)
+
+
 def test_close_on_arrival_hold_then_holding():
     ctl, arm, chunk = make()
     step(ctl, chunk)                              # approach: arm teleports onto the pinch point

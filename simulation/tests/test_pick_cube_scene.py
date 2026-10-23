@@ -5,7 +5,6 @@ import os
 import mujoco
 import numpy as np
 import pytest
-import yaml
 
 from humanego_sim.env import SIM_ROOT, ServeBreadSim, load_config
 from humanego_sim.live_export import export_live
@@ -13,7 +12,9 @@ from humanego_sim.scene_preview import record_scene
 from humanego_sim.web_export import export_model, export_rollout
 from humanego_sim import web_manifest, web_pack
 
-CONFIG = os.path.join(SIM_ROOT, "configs", "pick_cube.yaml")
+# Keep primitive-box regression coverage alongside the calibrated default scene.
+CONFIG = os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "A.yaml")
+DEFAULT_CONFIG = os.path.join(SIM_ROOT, "configs", "pick_cube.yaml")
 
 
 @pytest.fixture
@@ -21,14 +22,12 @@ def env():
     return ServeBreadSim(load_config(CONFIG), render=False)
 
 
-def test_pick_cube_selects_trained_policy_and_preserves_rig_and_control():
-    original, cube = load_config(), load_config(CONFIG)
-    for key in ("rig", "robot", "camera", "perception"):
-        assert cube[key] == original[key]
-    assert cube["control"] == dict(original["control"], grasp_threshold=0.7)
+def test_default_pick_cube_selects_calibrated_D_scene():
+    original, cube = load_config(), load_config(DEFAULT_CONFIG)
+    assert cube == load_config(os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "D.yaml"))
+    assert cube["scene"]["objects"]["container"]["shape"] == "rounded"
+    assert cube["control"]["grasp_threshold"] == 0.7
     assert not cube["scene_only"] and cube["mode"] == "single"
-    with open(CONFIG) as stream:
-        assert cube["policy"]["ckpt"] == yaml.safe_load(stream)["policy"]["ckpt"]
     assert original["task"] == "serve_bread" and "scene_only" not in original
     with pytest.raises(ValueError, match="tuned profiles are for serve_bread"):
         load_config(CONFIG, {"profile": "tuned"})

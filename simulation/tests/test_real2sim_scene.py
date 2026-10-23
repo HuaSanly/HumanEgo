@@ -13,7 +13,7 @@ from humanego_sim.scene import rig_geometry
 
 
 def config():
-    return load_config(os.path.join(SIM_ROOT, "configs", "pick_cube.yaml"))
+    return load_config(os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "A.yaml"))
 
 
 def test_camera_move_preserves_bases_and_updates_all_extrinsics():

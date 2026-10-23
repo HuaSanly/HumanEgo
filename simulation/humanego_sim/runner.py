@@ -173,8 +173,10 @@ class EpisodeRunner:
     def _perceived_geometry(self, side: str, so) -> dict:
         """What the robot knows about the scene from its own perception at t = 0 (world frame):
         bread centre / long axis / extent from its keypoints, and a place height over the plate."""
-        if self.task == "pick_cube":
-            return {}                         # bread grasp refinement and plate placement do not apply
+        pick_cube = self.task == "pick_cube"
+        assist = self.cc.get("grasp_assist", {})
+        if pick_cube and not (assist.get("enabled") and assist.get("refine", True)):
+            return {}
         env, out = self.env, {}
         Tcw = env.T_cam_in_world
         pts = {}
@@ -184,7 +186,7 @@ class EpisodeRunner:
                 T, kl = mirror_pose(T), kl * np.array([-1.0, 1.0, 1.0])
             pc = (T[:3, :3] @ kl.T).T + T[:3, 3]
             pts[key] = (Tcw[:3, :3] @ pc.T).T + Tcw[:3, 3]
-        b = pts.get(self.anchor_key)
+        b = pts.get("obj2" if pick_cube else self.anchor_key)
         if b is not None and len(b) >= 3:
             c = b.mean(0)
             # centre height: the contour keypoints lie on the visible upper surface, so their mean sits
@@ -199,6 +201,10 @@ class EpisodeRunner:
             w = np.array([-a[1], a[0], 0.0])
             out["bread"] = {"c": c.tolist(), "a": a.tolist(), "half_len": float(np.abs(xy @ a2).max()),
                             "half_wid": float(np.abs(xy @ w[:2]).max())}
+            if pick_cube:
+                # The existing grasp controller uses this legacy key for its pinch geometry.
+                # Derive it from perceived obj2 points, never the simulated body's true pose.
+                return out
             plate = pts.get("obj2")
             # place height: bread centre height on the table + the plate's floor (rim keypoints - 1.35 cm)
             floor = float(plate[:, 2].mean()) - 0.0135 if plate is not None else 0.0085
@@ -383,6 +389,8 @@ class EpisodeRunner:
         for k in range(he):
             Tv_k = pol.decode_ee_in_cam(pos[k], o6d[k], reference_anchor, self.T_align)
             Treal = mirror_pose(Tv_k) if ctx.is_flip else Tv_k
+            if self.cc.get("target_offset_world"):
+                Treal[:3, 3] += env.T_world_in_cam[:3, :3] @ np.asarray(self.cc["target_offset_world"], float)
             pt = T_to_p(Treal)
             pt = self._apply_forced_lift(pt, arm, ctx.forced_lift_counter, ctx.forced_lift_anchor_p_base)
             if not np.any(np.isnan(pt)):

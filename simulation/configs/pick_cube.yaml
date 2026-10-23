@@ -1,36 +1,9 @@
-# Reuse the existing rig, cameras and controller. Dimensions below are simulation
-# defaults in metres, not measurements of the real pick_cube props.
-base_config: serve_bread.yaml
-task: pick_cube
-scene_only: false
-mode: single
+# Calibrated D scene: appearance, geometry and observation camera.
+# Original scene snapshots remain in real2sim_pick_cube/A.yaml and simulation/runs/.
+base_config: real2sim_pick_cube/D.yaml
 
 policy:
-  ckpt: ~/GlassEgo/runs/Block Jamming real gournd/baseline_camera_onlygood/latest.pt # ./runs/pick_cube/HumanEgo/latest.pt
-
-scene:
-  objects:
-    container:
-      kind: container
-      role: obj1
-      pose: [0.47, 0.05, 0.0]
-      size: [0.18, 0.14, 0.07]
-      wall: 0.004
-      mass: 0.20
-      friction: [0.4, 0.01, 0.001]
-      rgba: [0.08, 0.30, 0.85, 1.0]
-    cube:
-      kind: cube
-      role: obj2
-      pose: [0.47, -0.15, 0.0]
-      size: [0.04, 0.04, 0.04]
-      mass: 0.05
-      friction: [0.4, 0.01, 0.001]
-      rgba: [0.85, 0.06, 0.04, 1.0]
-
-physics:
-  bread_model: rigid
-  finger_adhesion: 0.0
+  ckpt: ./runs/pick_cube/server_0.1/latest.pt
 
 control:
   grasp_threshold: 0.7

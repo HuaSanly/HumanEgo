@@ -64,6 +64,15 @@ def rig_geometry(cfg: dict, sides: List[str]) -> RigGeometry:
     T_base = {}
     for s in ("right", "left"):
         T_base[s] = T_cam @ Tbc[s]
+    view = rig.get("camera_pose")
+    if view:
+        # Change the observation camera without moving the calibrated robot bases.
+        pitch = np.deg2rad(float(view["pitch_deg"]))
+        T_cam = np.eye(4)
+        T_cam[:3, :3] = [[0, -np.sin(pitch), np.cos(pitch)], [-1, 0, 0],
+                            [0, -np.cos(pitch), -np.sin(pitch)]]
+        T_cam[:3, 3] = view["position"]
+        Tbc = {s: np.linalg.inv(T_cam) @ T_base[s] for s in T_base}
     return RigGeometry(T_cam_in_world=T_cam, T_base_in_world={s: T_base[s] for s in sides},
                        T_base_in_cam={s: Tbc[s] for s in sides})
 
@@ -228,6 +237,15 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     m.specular = 0.15
     m.shininess = 0.3
 
+    appearance = cfg.get("appearance", {})
+    table_look = appearance.get("table", {})
+    if table_look:
+        m = spec.add_material()
+        m.name = "table_custom"
+        m.rgba = table_look["rgba"]
+        m.specular = float(table_look.get("specular", 0.05))
+        m.shininess = float(table_look.get("shininess", 0.1))
+
     m = spec.add_material()
     m.name = "frame_black"
     m.rgba = [0.06, 0.06, 0.065, 1.0]
@@ -312,6 +330,13 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     l2.dir = list(-np.array([1.5, -1.0, 2.0]) / np.linalg.norm([1.5, -1.0, 2.0]))
     l2.diffuse = [0.16, 0.16, 0.16]
     l2.castshadow = False
+    lighting = appearance.get("lighting", {})
+    if lighting:
+        spec.visual.headlight.ambient = lighting["ambient"]
+        spec.visual.headlight.diffuse = [0, 0, 0]
+        l.diffuse = lighting["key"]
+        l.dir = lighting["direction"]
+        l2.diffuse = lighting["fill"]
 
     # ---------------- floor + table ----------------
     tb = cfg["rig"]["table"]
@@ -330,13 +355,23 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     cx = 0.5 * (tb["x_min"] + tb["x_max"])
     sx = 0.5 * (tb["x_max"] - tb["x_min"])
     sy = float(tb["half_width"])
-    gtop = _add_box(table, "table_top", [sx, sy, th / 2], [cx, 0.0, -th / 2], material="maple")
+    gtop = _add_box(table, "table_top", [sx, sy, th / 2], [cx, 0.0, -th / 2],
+                    material="table_custom" if table_look else "maple")
     gtop.friction = [float(phys.get("table_friction", 0.8)), 0.005, 0.0001]
     leg_h = (table_h - th) / 2
     for i, (lx, ly) in enumerate([(tb["x_min"] + 0.06, sy - 0.06), (tb["x_min"] + 0.06, -sy + 0.06),
                                   (tb["x_max"] - 0.06, sy - 0.06), (tb["x_max"] - 0.06, -sy + 0.06)]):
         _add_box(table, f"table_leg{i}", [0.025, 0.025, leg_h], [lx, ly, -th - leg_h],
                  material="frame_black", collide=False)
+    for i, marker in enumerate(appearance.get("markers", [])):
+        for axis in (0, 1):
+            size = [0.002, 0.014, 0.00015] if axis == 0 else [0.014, 0.002, 0.00015]
+            _add_box(table, f"marker_{i}_{axis}", size, [*marker, 0.0002],
+                     rgba=[0.025, 0.025, 0.025, 1], collide=False)
+    if appearance.get("wall"):
+        wall = appearance["wall"]
+        _add_box(wb, "background_wall", [0.015, 2, 1], [wall["x"], 0, 0.8],
+                 rgba=wall["rgba"], collide=False)
 
     # ---------------- rig frame (visual): rail behind the camera's view frustum, brackets to the
     # arm bases, and the camera mast. Nothing of it is visible from the policy camera.
@@ -370,6 +405,11 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     c.pos = list(cam_p)
     c.quat = _quat_wxyz(R_cam @ np.diag([1.0, -1.0, -1.0]))
     c.fovy = cam.fovy_deg
+    if cfg.get("camera_intrinsics"):
+        c.resolution = [cam.width, cam.height]
+        c.sensor_size = [cam.width / 1000, cam.height / 1000]
+        c.focal_pixel = [cam.fx, cam.fy]
+        c.principal_pixel = [cam.cx - cam.width / 2, cam.height / 2 - cam.cy]
 
     # a few nice viewing cameras for videos
     for name, pos, look in [("front_view", [1.45, -0.55, 0.62], [0.42, 0.0, 0.05]),
@@ -424,7 +464,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
                "solref": list(phys.get("bread_solref", [0.004, 1.0])),
                "solimp": list(phys.get("bread_solimp", [0.9, 0.95, 0.001, 0.5, 2.0])),
                "priority": int(phys.get("bread_priority", 1)), "solmix": float(phys.get("bread_solmix", 1.0))}
-    obj_meta = _add_pick_cube(wb, sc["objects"]) if pick_cube else {}
+    obj_meta = _add_pick_cube(spec, wb, sc["objects"]) if pick_cube else {}
     for s, bd in breads.items():
         kind = bd["type"]
         x, y, yaw = bd["pose"]
@@ -566,7 +606,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     return xml_path, meta
 
 
-def _add_pick_cube(worldbody, objects: dict) -> dict:
+def _add_pick_cube(spec, worldbody, objects: dict) -> dict:
     meta = {}
     for name, obj in objects.items():
         size = np.asarray(obj["size"], dtype=float)
@@ -584,6 +624,11 @@ def _add_pick_cube(worldbody, objects: dict) -> dict:
             if not 0 < wall < min(half):
                 raise ValueError(f"scene.objects.{name}.wall must be positive and smaller than half its size")
             hx, hy, hz = half
+            if obj.get("shape") == "rounded":
+                from .container import add_rounded_container
+                add_rounded_container(spec, body, obj)
+                meta[name] = {"kind": obj["kind"], "extents": size.tolist(), "role": obj["role"]}
+                continue
             parts = [("bottom", [hx, hy, wall / 2], [0, 0, -hz + wall / 2])]
             for sign in (-1, 1):
                 parts.append((f"x{sign}", [wall / 2, hy, hz - wall / 2],
@@ -599,6 +644,13 @@ def _add_pick_cube(worldbody, objects: dict) -> dict:
             geom = _add_box(body, f"{name}_{suffix}", half_size, pos, rgba=obj["rgba"], group=G_OBJECT)
             geom.density = float(obj["mass"]) / volume
             geom.friction = obj["friction"]
+            if obj.get("specular") is not None:
+                material = spec.add_material()
+                material.name = f"{name}_{suffix}_material"
+                material.rgba = obj["rgba"]
+                material.specular = float(obj["specular"])
+                material.shininess = float(obj.get("shininess", 0.2))
+                geom.material = material.name
         meta[name] = {"kind": obj["kind"], "extents": size.tolist(), "role": obj["role"]}
     return meta
 

@@ -693,6 +693,9 @@ class EpisodeRunner:
         inside = (np.all(np.abs(local[:, :2]) <= container_half[:2] - wall + 0.001)
                   and local[:, 2].min() >= -container_half[2] + wall - 0.003
                   and local[:, 2].max() <= container_half[2] + 0.003)
+        if props["container"].get("shape") == "rounded":
+            from .container import contains_points
+            inside = contains_points(local, props["container"])
         da = env.obj_free_dadr["cube"]
         speed = float(np.linalg.norm(env.d.qvel[da:da + 3]))
         settled = speed < 0.05 and np.linalg.norm(env.d.qvel[da + 3:da + 6]) < 0.5

@@ -9,6 +9,7 @@ inference logic on top of it.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import os
 from typing import Dict, List, Optional
 
@@ -72,6 +73,8 @@ class ServeBreadSim:
         self.cfg = cfg
         self.robot: RobotSpec = get_robot(cfg["robot"])
         self.cam: CameraSpec = get_camera(cfg["camera"])
+        if cfg.get("camera_intrinsics"):
+            self.cam = replace(self.cam, **cfg["camera_intrinsics"])
         self.xml_path, self.meta = build_scene(cfg, self.robot, self.cam)
         self.m = mujoco.MjModel.from_xml_path(self.xml_path)
         self.d = mujoco.MjData(self.m)

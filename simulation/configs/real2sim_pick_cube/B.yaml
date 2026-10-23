@@ -1,0 +1,61 @@
+base_config: A.yaml
+appearance:
+  keypoint_resolution:
+  - 1232
+  - 1624
+  table:
+    rgba:
+    - 0.7691082802547771
+    - 0.72
+    - 0.640546095467275
+    - 1.0
+    specular: 0.04
+  lighting:
+    ambient:
+    - 0.55
+    - 0.55
+    - 0.55
+    key:
+    - 0.25
+    - 0.25
+    - 0.25
+    fill:
+    - 0.08
+    - 0.08
+    - 0.08
+    direction:
+    - 0.5
+    - -0.5
+    - -1
+  wall:
+    x: 0.95
+    rgba:
+    - 0.66
+    - 0.64
+    - 0.59
+    - 1
+  markers:
+  - - 0.17
+    - 0.22
+  - - 0.15
+    - 0
+  - - 0.17
+    - -0.2
+scene:
+  objects:
+    container:
+      rgba:
+      - 0.5858249740574196
+      - 0.704659090909091
+      - 0.8039999999999999
+      - 1.0
+      specular: 0.17
+      shininess: 0.25
+    cube:
+      rgba:
+      - 0.81
+      - 0.2766013071895425
+      - 0.24614642857142854
+      - 1.0
+      specular: 0.03
+      shininess: 0.1

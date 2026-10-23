@@ -360,7 +360,14 @@ class SimPerception:
         """Policy input image for one side (in that side's domain: flipped for the left arm)."""
         is_flip = side == "left"
         vis = cv2.flip(clean_bg, 1) if is_flip else clean_bg.copy()
-        active_K = self.K_flip if is_flip else self.K
+        draw_K = self.K.copy()
+        active_K = (self.K_flip if is_flip else self.K).copy()
+        resolution = self.env.cfg.get("appearance", {}).get("keypoint_resolution")
+        if resolution:
+            height, width = resolution
+            scale = np.diag([width / vis.shape[1], height / vis.shape[0], 1])
+            draw_K, active_K = scale @ draw_K, scale @ active_K
+            vis = cv2.resize(vis, (width, height), interpolation=cv2.INTER_LINEAR)
         self.visualkpts.reset_obj_counter()
         if draw_obj_kpts:
             for ok in so.objs_meta:
@@ -375,8 +382,10 @@ class SimPerception:
                 vis = self.visualkpts.process_single_obj(vis, np.stack([u, v], 1))
         if draw_arm_kpts:
             if is_flip:
-                tmp = self.visualkpts.process_single_gripper(cv2.flip(vis, 1), arm.get_p_in_cam(), is_grasp, self.K)
+                tmp = self.visualkpts.process_single_gripper(cv2.flip(vis, 1), arm.get_p_in_cam(), is_grasp, draw_K)
                 vis = cv2.flip(tmp, 1)
             else:
-                vis = self.visualkpts.process_single_gripper(vis, arm.get_p_in_cam(), is_grasp, self.K)
+                vis = self.visualkpts.process_single_gripper(vis, arm.get_p_in_cam(), is_grasp, draw_K)
+        if resolution:
+            vis = cv2.resize(vis, (clean_bg.shape[1], clean_bg.shape[0]), interpolation=cv2.INTER_AREA)
         return vis

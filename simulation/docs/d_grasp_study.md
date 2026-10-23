@@ -35,5 +35,14 @@
 保存在 `simulation/runs/d_grasp_study_20261023/`；完整报告为 `study_report.md`。
 新种子在选择参数后固定，复验后没有继续调参。
 
+回放机位已修复：旧默认前视相机位于背景墙外，近距离演示机位又容易被
+机械臂遮挡；pick_cube 的前视和侧视现在从桌面对侧俯看工作区。
+回放默认关闭策略输入小窗，可通过 `show_policy=True` 恢复。已从原始
+`episode.json` 重导出 `grasp_and_place.mp4` 和 `pick_cube_model/episode.mp4`，
+分辨率为 960×720；旧视频以 `_before_camera_fix.mp4` 后缀保留。
+`grasp_and_place_clear.mp4` 为同内容的新文件名，便于避开旧预览缓存。
+策略观察相机、原始轨迹与实验成绩没有改变。检查了编码后的关键帧和
+完整解码，相关场景回归测试 14 项通过。
+
 验证：新增测试通过；CPU 回归 88 通过、6 跳过。既有默认参数测试仍有
 1 项失败：测试写死 `look_ahead_offset=45`，用户原配置为 35。

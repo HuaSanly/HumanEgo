@@ -412,8 +412,12 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         c.principal_pixel = [cam.cx - cam.width / 2, cam.height / 2 - cam.cy]
 
     # a few nice viewing cameras for videos
-    for name, pos, look in [("front_view", [1.45, -0.55, 0.62], [0.42, 0.0, 0.05]),
-                            ("side_view", [0.55, -1.25, 0.55], [0.45, 0.0, 0.05]),
+    # Pick-cube's background wall blocks the old front camera; view the grasp from
+    # the opposite side of the table so the arm does not hide the cube either.
+    front = ([0.40, 0.80, 0.80], [0.34, -0.02, 0.08]) if pick_cube else ([1.45, -0.55, 0.62], [0.42, 0.0, 0.05])
+    side = ([0.85, 0.85, 1.10], [0.34, -0.02, 0.08]) if pick_cube else ([0.55, -1.25, 0.55], [0.45, 0.0, 0.05])
+    for name, pos, look in [("front_view", *front),
+                            ("side_view", *side),
                             ("top_view", [0.50, 0.0, 1.35], [0.45, 0.0, 0.0])]:
         cc = wb.add_camera()
         cc.name = name

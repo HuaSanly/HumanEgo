@@ -44,22 +44,27 @@ Headless rendering uses `MUJOCO_GL=egl` (set automatically).
 
 ## pick_cube scene
 
-`configs/pick_cube.yaml` adds a blue open plastic container (`obj1`) and a red
-rigid block (`obj2`), matching `cfg/preprocess/tasks/pick_cube.yaml`. It inherits
-the existing robot rig, table, camera calibration, arm mode and controller settings.
-Prop dimensions, masses, friction and initial `[x, y, yaw_deg]` poses are editable
-under `scene.objects`; the supplied values are simulation defaults, not measured
-real-world dimensions. The container has a bottom and four collision walls.
+`configs/pick_cube.yaml` is the standalone configuration for a blue open plastic
+container (`obj1`) and a red rigid block (`obj2`), matching
+`cfg/preprocess/tasks/pick_cube.yaml`. It contains the fixed D scene, robot rig,
+table, camera calibration, appearance, physics, perception and grasp controller;
+it does not inherit `serve_bread.yaml` or another YAML. Prop dimensions, masses,
+friction and initial `[x, y, yaw_deg]` poses are editable under `scene.objects`.
+The default container has rounded, tapered collision walls; dimensions were
+estimated from training data and have not been confirmed by physical measurements.
 
 The default is a **closed-loop run of your trained pick_cube model**, using
-`runs/pick_cube/HumanEgo/latest.pt` and the `config.json` / `dataset_stats.json`
+`runs/pick_cube/server_0.1/latest.pt` and the `config.json` / `dataset_stats.json`
 next to it. It uses the right arm, as in training (`single_hand: true`,
 `absolute` actions). The checkpoint's `config.json` selects `camera_frame` or
 `anchor_frame` automatically; do not change this flag to reinterpret trained weights.
-No public model download is needed. The robot, camera and production controller
-settings are inherited; bread-specific
-grasp refinement and plate-based idle completion are not used. Success requires
+No public model download is needed. Perception-guided grasp assistance overwrites
+the grasp point and orientation, waits before closing, and permits one retry.
+The existing 5 cm automatic lift is explicit under `control.forced_lift_*`.
+Bread physics and plate-based idle completion are omitted. Success requires
 the grasped block to be released, settled and fully inside the container.
+Historical A–E and grasp-study configs remain frozen under `simulation/runs/`;
+active pick_cube parameters are maintained only in `configs/pick_cube.yaml`.
 
 ```bash
 # Activate an environment containing the project's simulation dependencies.

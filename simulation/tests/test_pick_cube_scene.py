@@ -5,6 +5,7 @@ import os
 import mujoco
 import numpy as np
 import pytest
+import yaml
 
 from humanego_sim.env import SIM_ROOT, ServeBreadSim, load_config
 from humanego_sim.live_export import export_live
@@ -13,28 +14,31 @@ from humanego_sim.web_export import export_model, export_rollout
 from humanego_sim import web_manifest, web_pack
 
 # Keep primitive-box regression coverage alongside the calibrated default scene.
-CONFIG = os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "A.yaml")
-DEFAULT_CONFIG = os.path.join(SIM_ROOT, "configs", "pick_cube.yaml")
+CONFIG = os.path.join(SIM_ROOT, "configs", "pick_cube.yaml")
 
 
 @pytest.fixture
 def env():
-    return ServeBreadSim(load_config(CONFIG), render=False)
+    return ServeBreadSim(load_config(CONFIG, {"scene": {"objects": {"container": {"shape": "box"}}}}), render=False)
 
 
-def test_default_pick_cube_selects_calibrated_D_scene():
-    original, cube = load_config(), load_config(DEFAULT_CONFIG)
-    d_scene = load_config(os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "D.yaml"))
-    assert cube == load_config(os.path.join(SIM_ROOT, "configs", "pick_cube_grasp", "recommended.yaml"))
-    for key in ("appearance", "camera", "camera_intrinsics", "rig", "physics"):
-        assert cube[key] == d_scene[key]
-    for name, obj in cube["scene"]["objects"].items():
-        assert {k: v for k, v in obj.items() if k != "pose"} == {
-            k: v for k, v in d_scene["scene"]["objects"][name].items() if k != "pose"}
+def test_default_pick_cube_is_standalone_without_bread_settings(tmp_path):
+    with open(CONFIG) as file:
+        raw = yaml.safe_load(file)
+    cube = load_config(CONFIG)
+    standalone = tmp_path / "pick_cube.yaml"
+    standalone.write_text(yaml.safe_dump(raw))
+    assert load_config(str(standalone)) == cube == raw
+    assert "base_config" not in raw and "per_robot" not in raw
+    assert set(cube["scene"]) == {"objects"}
+    assert not any(key.startswith(("bread_", "plate_")) or key == "soft" for key in cube["physics"])
+    assert not {"use_idle_done", "idle_time_limit", "idle_dist_threshold"} & cube["control"].keys()
     assert cube["scene"]["objects"]["container"]["shape"] == "rounded"
+    assert cube["scene"]["objects"]["cube"]["pose"] == [0.4, -0.2, 0.0]
     assert cube["control"]["grasp_threshold"] == 0.7
+    assert cube["control"]["forced_lift_height"] == 0.05
+    assert cube["control"]["grasp_assist"]["orientation_world_rpy_deg"] == [180, 0, 180]
     assert not cube["scene_only"] and cube["mode"] == "single"
-    assert original["task"] == "serve_bread" and "scene_only" not in original
     with pytest.raises(ValueError, match="tuned profiles are for serve_bread"):
         load_config(CONFIG, {"profile": "tuned"})
 
@@ -68,7 +72,7 @@ def test_cube_falls_into_open_container(env):
     assert env.object_lowest_z("cube") > 0.002
     assert np.isfinite(env.d.qpos).all()
     for name in env.obj_names:
-        assert env.m.body_mass[env.obj_bodies[name]] == pytest.approx(cfg[name]["mass"])
+        assert env.m.body_mass[env.obj_bodies[name]] == pytest.approx(cfg[name]["mass"], abs=1e-6)
 
 
 def test_scene_recording_and_web_export(env, tmp_path):

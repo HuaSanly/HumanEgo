@@ -1,9 +1,147 @@
-# Calibrated D scene with the validated grasp controller and reachable cube pose.
-# Original scene snapshots remain in real2sim_pick_cube/A.yaml and simulation/runs/.
-base_config: pick_cube_grasp/recommended.yaml
+# pick_cube 独立配置：固定 D 外观、几何与当前抓取控制，不继承其他任务配置。
+# 长度单位为米；物体 pose 为 [x, y, yaw_deg]，姿态角单位为度。
+task: pick_cube
+mode: single
+robot: trossen_wxai
+camera: realsense_d405
+scene_only: false
+profile: production
 
 policy:
   ckpt: ./runs/pick_cube/server_0.1/latest.pt
+  num_inference_steps: 20
+  seed: 7
+
+camera_intrinsics:
+  fx: 407.0127819474345
+  fy: 407.0329273379841
+  cx: 319.5
+  cy: 239.5
+
+rig:
+  # cam_height 与手眼矩阵确定机器人底座；camera_pose 单独调整观察相机。
+  cam_height: 0.366
+  T_base_in_cam:
+    right: [[0.0, -1.0, 0.0, 0.323765], [-0.60181502, 0.0, -0.79863551, 0.10437084],
+            [0.79863551, 0.0, -0.60181502, 0.22907588], [0.0, 0.0, 0.0, 1.0]]
+    # 几何标定仍需左右两份矩阵；模型执行只使用右臂。
+    left: [[0.0, -1.0, 0.0, -0.323765], [-0.60181502, 0.0, -0.79863551, 0.10437084],
+           [0.79863551, 0.0, -0.60181502, 0.22907588], [0.0, 0.0, 0.0, 1.0]]
+  camera_pose:
+    position: [0.0, 0.0, 0.5348300427214294]
+    pitch_deg: 49.31663991974981
+  table:
+    x_min: -0.35
+    x_max: 0.98
+    half_width: 0.75
+    thickness: 0.045
+
+appearance:
+  keypoint_resolution: [1232, 1624]
+  table:
+    rgba: [0.7691082802547771, 0.72, 0.640546095467275, 1.0]
+    specular: 0.04
+  lighting:
+    ambient: [0.55, 0.55, 0.55]
+    key: [0.25, 0.25, 0.25]
+    fill: [0.08, 0.08, 0.08]
+    direction: [0.5, -0.5, -1.0]
+  wall:
+    x: 0.95
+    rgba: [0.66, 0.64, 0.59, 1.0]
+  markers: [[0.17, 0.22], [0.15, 0.0], [0.17, -0.2]]
+
+scene:
+  objects:
+    container:
+      kind: container
+      role: obj1
+      pose: [0.2924605431065056, 0.1096122152278755, 0.0]
+      size: [0.1515524680683616, 0.22978338074932372, 0.09647649800453617]
+      shape: rounded
+      wall: 0.004
+      radius: 0.018
+      taper: 0.84
+      rim: 0.005
+      mass: 0.2
+      friction: [0.4, 0.01, 0.001]
+      rgba: [0.5858249740574196, 0.704659090909091, 0.8039999999999999, 1.0]
+      specular: 0.17
+      shininess: 0.25
+    cube:
+      kind: cube
+      role: obj2
+      pose: [0.4, -0.2, 0.0]
+      size: [0.03352564560905681, 0.03352564560905681, 0.03352564560905681]
+      mass: 0.05
+      friction: [0.4, 0.01, 0.001]
+      rgba: [0.81, 0.2766013071895425, 0.24614642857142854, 1.0]
+      specular: 0.03
+      shininess: 0.1
+
+physics:
+  timestep: 0.002
+  impratio: 100
+  pad_friction: 0.8
+  table_friction: 0.45
+  gripper_force: 35.0
+  arm_kp_scale: 4.0
+  arm_kv_ratio: 0.08
+
+perception:
+  n_init_frames: 10
+  depth_noise: true
+  mask_source: gt          # 当前实验使用仿真真值分割。
+  mask_frames: 5
+  latch_dist_thresh: 0.2
 
 control:
+  control_freq: 10.0
+  policy_period: 0.3
+  max_episode_time: 40.0
+  step_stride: 2
+  look_ahead_offset: 35
+  max_history_len: 1
+  alpha: 0.3
+  alpha_rot: 0.0
+  duration_smooth_param: 4.0
+  tcp_offset: 0.0
+  use_safety_cage: true
+  max_pos_step: 0.08
+  max_rot_step: 0.08
+  safe_z_min: -0.2
   grasp_threshold: 0.7
+  should_grasp_method: any_first_k
+  grasp_k_any: 50
+  grasp_latch: false
+  close_gripper_goal_time: 0.5
+  open_gripper_goal_time: 0.5
+  done_threshold: 0.99
+  done_requires_grasp: true
+  grasp_state_source: measured_or_stalled
+  # 沿用当前自动抬升辅助；帧数按策略调用次数计算。
+  forced_lift_height: 0.05
+  forced_lift_frames: 15
+  forced_lift_ramp_frames: 5
+  grasp_assist:
+    enabled: true
+    refine: true
+    # 完全使用感知中心和固定俯抓姿态覆盖模型抓取目标。
+    lateral_gain: 1.0
+    along_max: 0.0
+    height_min: 0.0
+    height_max: 0.0
+    orientation_world_rpy_deg: [180, 0, 180]
+    arrive_tol: 0.008
+    arrive_rot_deg: 8.0
+    approach_timeout: 4.0
+    timeout_near: 0.02
+    approach_max: 8.0
+    close_hold: 0.7
+    regrasp_max: 1
+    retry_lower: 0.0
+    retry_inward: 0.0
+    grip_check: q
+    q_empty: 0.1
+    empty_time: 0.3
+    regrasp_cooldown: 1.2

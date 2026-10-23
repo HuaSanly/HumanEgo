@@ -1,7 +1,7 @@
 # D 场景抓取调参（2026-10-23）
 
-默认 `simulation/configs/pick_cube.yaml` 现在继承
-`pick_cube_grasp/recommended.yaml`，再继承原始 D。模型权重、D 的外观、
+默认 `simulation/configs/pick_cube.yaml` 是唯一的独立任务配置，已将原先
+`recommended → D → C → A` 的有效参数展开合并。模型权重、D 的外观、
 观察相机、物体形状、尺寸、质量和摩擦保持固定，调整位置与抓取控制。
 
 先完成 12 组开发实验，每组 10 次，再固定参数，用新种子为 D 基线与
@@ -20,7 +20,9 @@
 推荐组把方块从约 `[0.233, -0.077, 0]` 移到 `[0.40, -0.20, 0]`，
 基于感知的 `obj2` 轮廓深度估计夹点，用世界系 RPY `[180, 0, 180]` 度
 俯抓，到位后闭合并保持 0.7 s。抓取阈值仍为 0.7，关闭 `grasp_latch`。
-参数和复现命令见 `configs/pick_cube_grasp/README.md`。
+所有当前参数直接编辑 `configs/pick_cube.yaml`。自动抬升 5 cm 和抓取状态
+判定等原先隐含的有效默认值也已显式列出。面包、盘子、软体物理及
+其他机器人的旧覆盖项已删除；不再维护单独的 A–E 和 recommended YAML。
 
 结果属于策略加感知引导的控制辅助；不代表纯模型的泛化能力发生变化。
 接触力只用于评估。仿真的真值分割设置没有改变，真实视觉误差下尚未验证。
@@ -34,6 +36,31 @@
 原始配置、逐次日志、接触遥测、12 组完整结果、配置/代码哈希与视频
 保存在 `simulation/runs/d_grasp_study_20261023/`；完整报告为 `study_report.md`。
 新种子在选择参数后固定，复验后没有继续调参。
+
+运行当前配置：
+
+```bash
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --video
+```
+
+历史实验使用各自运行目录中的冻结配置，不使用迭代后的默认配置替代基线。
+例如复现第二轮开发实验（新输出目录）：
+
+```bash
+python simulation/scripts/d_grasp_study.py \
+  --config simulation/runs/d_grasp_study_20261023/baseline.yaml \
+  --variants simulation/runs/d_grasp_study_20261023/round2/variants.json \
+  --output simulation/runs/d_study_reproduction --n 10
+```
+
+A–E 的冻结配置在 `simulation/runs/real2sim_ablation_20261023/` 及其
+`threshold_0p7/` 下。整理前的生效配置和被移除的配置文件备份在
+`simulation/runs/config_consolidation_20261023/`。已有实验日志不改写。
+
+配置合并核验：模型、初始状态及观察图像共 485 项数组与合并前完全一致，
+控制器实际参数一致；相关测试 17 项通过。合并前后各执行一次 40 秒闭环
+流程，均成功入盒，但不满足逐帧轨迹相同，因此这两次只作为运行核验，
+不并入上述 140 次正式实验或更新成功率。
 
 回放机位已修复：旧默认前视相机位于背景墙外，近距离演示机位又容易被
 机械臂遮挡；pick_cube 的前视现在从桌面对面正对机械臂，位置为

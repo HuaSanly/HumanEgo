@@ -178,12 +178,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261023)
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--config", default="simulation/configs/real2sim_pick_cube/D.yaml")
-    parser.add_argument("--variants", type=Path, default=Path("simulation/configs/pick_cube_grasp/round1.json"))
+    parser.add_argument("--config", default="simulation/configs/pick_cube.yaml")
+    parser.add_argument("--variants", type=Path, help="parameter groups as JSON; saved in the output directory")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     if not (args.output / "variants.json").exists():
+        if args.variants is None:
+            parser.error("a new study requires --variants; existing studies keep their frozen variants.json")
         variants = json.loads(args.variants.read_text())
         write_json(args.output / "variants.json", variants)
         base = load_config(args.config)

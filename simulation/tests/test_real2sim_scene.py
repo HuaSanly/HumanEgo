@@ -13,7 +13,7 @@ from humanego_sim.scene import rig_geometry
 
 
 def config():
-    return load_config(os.path.join(SIM_ROOT, "configs", "real2sim_pick_cube", "A.yaml"))
+    return load_config(os.path.join(SIM_ROOT, "configs", "pick_cube.yaml"))
 
 
 def test_camera_move_preserves_bases_and_updates_all_extrinsics():
@@ -65,10 +65,9 @@ def test_appearance_preserves_dynamic_geometry_and_contacts():
         aid, bid = a.obj_bodies[name], b.obj_bodies[name]
         assert a.m.body_mass[aid] == pytest.approx(b.m.body_mass[bid])
         np.testing.assert_allclose(a.m.body_inertia[aid], b.m.body_inertia[bid])
-        for suffix in ("box",) if name == "cube" else ("bottom", "x-1", "x1", "y-1", "y1"):
-            ga, gb = a.m.geom(f"{name}_{suffix}"), b.m.geom(f"{name}_{suffix}")
-            np.testing.assert_allclose(ga.size, gb.size)
-            np.testing.assert_allclose(ga.friction, gb.friction)
+        ga, gb = np.where(a.m.geom_bodyid == aid)[0], np.where(b.m.geom_bodyid == bid)[0]
+        np.testing.assert_allclose(a.m.geom_size[ga], b.m.geom_size[gb])
+        np.testing.assert_allclose(a.m.geom_friction[ga], b.m.geom_friction[gb])
 
 
 def test_camera_intrinsics_match_render_projection():
@@ -88,7 +87,9 @@ def test_overlay_matches_training_relative_dot_size():
                                                  "T_obj_in_cam_static": np.eye(4)}}, dynamic_obj_poses={})
     counts = []
     for appearance in ({}, {"keypoint_resolution": [1232, 1624]}):
-        env = ServeBreadSim(deep_update(config(), {"appearance": appearance}), render=False)
+        cfg = config()
+        cfg["appearance"] = appearance
+        env = ServeBreadSim(cfg, render=False)
         perception = SimPerception(env)
         image = perception.make_side_image("right", objects, background, None, False, draw_arm_kpts=False)
         y, x = np.where(image.any(axis=2))

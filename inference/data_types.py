@@ -12,9 +12,7 @@ class ObjectState:
     """Object pose and local keypoints; preserves the original policy container."""
 
     T_in_cam: np.ndarray  # (4, 4), object -> camera
-    kpts_local: np.ndarray = field(
-        default_factory=lambda: np.zeros((0, 3), np.float32)
-    )
+    kpts_local: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), np.float32))
 
 
 @dataclass(frozen=True)
@@ -60,14 +58,15 @@ class SceneState:
     gripper: float
     latched_object: str | None = None
     T_object_in_hand: np.ndarray | None = None
+    last_seen: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class PreparedObservation:
     """Perception result consumed by the original ICTPolicy methods.
 
-    clean_bgr is uint8 (480, 640, 3); K is the matching left rectified (3, 3)
-    intrinsics. ICTPolicy.prepare_image performs the final RGB/320x240 conversion.
+    clean_bgr is uint8 on the 1624x1232 training canvas; K is the matching
+    scaled left rectified (3, 3) intrinsics. ICTPolicy.prepare_image performs the final RGB/320x240 conversion.
     """
 
     frame: StereoFrame

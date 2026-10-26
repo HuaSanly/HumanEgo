@@ -57,7 +57,9 @@ def load_config(path: str | Path) -> InferenceConfig:
     policy["ckpt"] = str(_resolve_path(policy.get("ckpt"), source))
     steps = policy.get("num_inference_steps")
     if type(steps) is not int or steps <= 0:
-        raise ValueError(f"{source}: policy.num_inference_steps must be a positive integer")
+        raise ValueError(
+            f"{source}: policy.num_inference_steps must be a positive integer"
+        )
     if camera.get("image_size_hw") != [480, 640]:
         raise ValueError(f"{source}: camera.image_size_hw must be [480, 640]")
 
@@ -65,7 +67,9 @@ def load_config(path: str | Path) -> InferenceConfig:
         camera[name] = str(_resolve_path(camera.get(name), source))
     intrinsics = _read_yaml(Path(camera["intrinsics_path"]))
     if intrinsics.get("image_size_hw") != camera["image_size_hw"]:
-        raise ValueError("intrinsics.image_size_hw differs from the transmitted image size")
+        raise ValueError(
+            "intrinsics.image_size_hw differs from the transmitted image size"
+        )
     if intrinsics.get("rectified") is not True:
         raise ValueError("intrinsics.rectified must be true for the serving contract")
     for side in ("left", "right"):
@@ -73,9 +77,13 @@ def load_config(path: str | Path) -> InferenceConfig:
             raise ValueError(f"intrinsics.{side} must be a mapping with K")
 
     return InferenceConfig(
-        source=source, policy=policy, camera=camera,
-        perception=dict(values["perception"]), deployment=dict(values["deployment"]),
-        intrinsics=intrinsics, extrinsics=_read_yaml(Path(camera["extrinsics_path"])),
+        source=source,
+        policy=policy,
+        camera=camera,
+        perception=dict(values["perception"]),
+        deployment=dict(values["deployment"]),
+        intrinsics=intrinsics,
+        extrinsics=_read_yaml(Path(camera["extrinsics_path"])),
     )
 
 
@@ -106,10 +114,13 @@ def validate_runtime_config(config: InferenceConfig) -> None:
             raise ValueError(f"{name} must be a finite {shape} matrix")
         if shape == (3, 3):
             if (
-                matrix[0, 0] <= 0 or matrix[1, 1] <= 0
+                matrix[0, 0] <= 0
+                or matrix[1, 1] <= 0
                 or not np.allclose(matrix[2], [0, 0, 1])
             ):
-                raise ValueError(f"{name} must contain positive focal lengths and row [0, 0, 1]")
+                raise ValueError(
+                    f"{name} must contain positive focal lengths and row [0, 0, 1]"
+                )
         elif (
             not np.allclose(matrix[3], [0, 0, 0, 1])
             or not np.allclose(matrix[:3, :3].T @ matrix[:3, :3], np.eye(3), atol=1e-5)
@@ -117,10 +128,39 @@ def validate_runtime_config(config: InferenceConfig) -> None:
         ):
             raise ValueError(f"{name} must be a rigid transform")
     if np.linalg.norm(np.asarray(matrices["extrinsics.T_left_from_right"])[:3, 3]) == 0:
-        raise ValueError("extrinsics.T_left_from_right must have a nonzero stereo baseline")
+        raise ValueError(
+            "extrinsics.T_left_from_right must have a nonzero stereo baseline"
+        )
+
+    left = np.asarray(matrices["intrinsics.left.K"])
+    right = np.asarray(matrices["intrinsics.right.K"])
+    T = np.asarray(matrices["extrinsics.T_left_from_right"])
+    if not np.allclose(left, right, atol=1e-5) or not np.allclose(
+        left[[0, 1], [1, 0]], 0, atol=1e-8
+    ):
+        raise ValueError("Rectified stereo requires matching zero-skew intrinsics")
+    if (
+        not np.allclose(T[:3, :3], np.eye(3), atol=1e-5)
+        or T[0, 3] <= 0
+        or not np.allclose(T[1:3, 3], 0, atol=1e-6)
+    ):
+        raise ValueError(
+            "Rectified baseline must point along positive left optical X in metres"
+        )
+    if config.policy["num_inference_steps"] != 20:
+        raise ValueError("The approved baseline requires 20 ODE steps")
+    if (
+        config.deployment.get("mode") != "chunk"
+        or config.deployment.get("action_fps") != 30
+    ):
+        raise ValueError("HumanEgo deployment requires chunk mode at 30 Hz")
 
     checkpoint = Path(config.policy["ckpt"])
-    required_files = (checkpoint, checkpoint.parent / "config.json", checkpoint.parent / "dataset_stats.json")
+    required_files = (
+        checkpoint,
+        checkpoint.parent / "config.json",
+        checkpoint.parent / "dataset_stats.json",
+    )
     for file in required_files:
         if not file.is_file():
             raise FileNotFoundError(f"Required policy file is missing: {file}")

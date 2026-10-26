@@ -1,0 +1,12 @@
+# Python 3.12; install Torch CUDA wheels first (install.sh).
+lerobot[remote] @ git+https://github.com/huggingface/lerobot.git@5517a326eeb9b457cfe07d59b9bfdf291799c8d9
+transformers==5.4.0
+huggingface-hub==1.6.0
+sam2==1.1.0
+onnxruntime-gpu==1.26.0
+python-box==7.4.1
+numpy==2.2.6
+opencv-python-headless==4.13.0.92
+PyYAML==6.0.3
+pytest==9.1.1
+setuptools==81.0.0

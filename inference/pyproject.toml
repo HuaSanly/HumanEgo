@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_policy_humanego"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+description = "HumanEgo anchor policy and stereo perception for native LeRobot remote inference"
+dependencies = ["numpy>=2,<2.3", "PyYAML>=6", "python-box>=7", "opencv-python-headless>=4.9,<4.14"]
+
+[project.scripts]
+humanego-export = "lerobot_policy_humanego.export:main"
+
+[tool.setuptools]
+packages = ["lerobot_policy_humanego"]
+py-modules = ["training.FlowMatchingModel", "utils.ict", "utils.utils_math", "utils.utils_io", "preprocess.KptsSelector", "preprocess.OrientAnything"]
+include-package-data = false
+package-dir = {lerobot_policy_humanego = ".", training = "../training", utils = "../utils", preprocess = "../preprocess"}

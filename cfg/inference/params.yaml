@@ -1,34 +1,89 @@
-# All file paths are relative to this params.yaml; array image sizes use H,W.
+# Paths are relative to this file; BRX calibration remains explicitly unmeasured.
 policy:
   ckpt: ../../runs/pick_cube/HumanEgo_anchor/latest.pt
   num_inference_steps: 20
   device: cuda
-
 camera:
-  image_size_hw: [480, 640]
+  image_size_hw:
+  - 480
+  - 640
   intrinsics_path: intrinsics.yaml
   extrinsics_path: extrinsics.yaml
-
 perception:
+  object_ttl_s: 1.0
+  stereo:
+    depth_range_m:
+    - 0.15
+    - 2.5
+    lr_threshold_px: 1.0
   anchor_key: obj1
   object_prompts:
-    obj1: "a blue plastic container ."
-    obj2: "a red block ."
-  erase_prompt: "a robot arm . a robot gripper ."
-  # Planned engines; the scaffold does not initialize or download them.
+    obj1: a blue plastic container .
+    obj2: a red block .
+  erase_prompt: a robot arm . a robot gripper .
   segmentation:
     dino_model_id: IDEA-Research/grounding-dino-tiny
+    dino_revision: a2bb814dd30d776dcf7e30523b00659f4f141c71
+    sam2_revision: 7c218beaf0bb87874785f32b582f640134fc1c09
     sam2_repo_id: facebook/sam2-hiera-tiny
     box_threshold: 0.3
   lama:
     repo_id: Carve/LaMa-ONNX
+    revision: c3c0c9e468934d62e79c329e35d82dd09ff8c444
     filename: lama_fp32.onnx
-    input_size_hw: [512, 512]
+    input_size_hw:
+    - 512
+    - 512
     mask_dilation: 9
-
-# These are the intended native remote settings, not an executable server config.
-# export.py will prepare the official deployment configuration in a later step.
+  rendering:
+    canvas_hw:
+    - 1232
+    - 1624
+    width_open_m: 0.18
+    width_closed_m: 0.05
+    finger_length_m: 0.08
+    root_depth_m: 0.08
+    points_per_segment: 6
+    hand_radius: 4
+    object_radius: 5
+    white_core_radius: 1
+    open_colors:
+    - - 0
+      - 255
+      - 255
+    - - 0
+      - 160
+      - 255
+    - - 0
+      - 60
+      - 255
+    - - 0
+      - 0
+      - 255
+    closed_colors:
+    - - 255
+      - 255
+      - 255
+    - - 255
+      - 255
+      - 255
+    - - 255
+      - 0
+      - 255
+    - - 255
+      - 0
+      - 255
+    object_colors:
+      obj1:
+      - 255
+      - 255
+      - 0
+      obj2:
+      - 0
+      - 255
+      - 0
 deployment:
+  diagnostic_dir: null
   name: humanego-pick-cube-anchor
   mode: chunk
   action_fps: 30.0

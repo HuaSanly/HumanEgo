@@ -76,12 +76,18 @@ def load_config(path: str | Path) -> InferenceConfig:
         if not isinstance(intrinsics.get(side), dict):
             raise ValueError(f"intrinsics.{side} must be a mapping with K")
 
+    deployment = dict(values["deployment"])
+    if deployment.get("diagnostic_dir") is not None:
+        deployment["diagnostic_dir"] = str(
+            _resolve_path(deployment["diagnostic_dir"], source)
+        )
+
     return InferenceConfig(
         source=source,
         policy=policy,
         camera=camera,
         perception=dict(values["perception"]),
-        deployment=dict(values["deployment"]),
+        deployment=deployment,
         intrinsics=intrinsics,
         extrinsics=_read_yaml(Path(camera["extrinsics_path"])),
     )

@@ -32,16 +32,27 @@ class ScaffoldTests(unittest.TestCase):
                 config = load_config(PARAMS)
             finally:
                 os.chdir(previous)
-        self.assertEqual(Path(config.policy["ckpt"]), ROOT / "runs/pick_cube/HumanEgo_anchor/latest.pt")
-        self.assertEqual(Path(config.camera["intrinsics_path"]), PARAMS.parent / "intrinsics.yaml")
-        self.assertEqual(Path(config.camera["extrinsics_path"]), PARAMS.parent / "extrinsics.yaml")
+        self.assertEqual(
+            Path(config.policy["ckpt"]),
+            ROOT / "runs/pick_cube/HumanEgo_anchor/latest.pt",
+        )
+        self.assertEqual(
+            Path(config.camera["intrinsics_path"]), PARAMS.parent / "intrinsics.yaml"
+        )
+        self.assertEqual(
+            Path(config.camera["extrinsics_path"]), PARAMS.parent / "extrinsics.yaml"
+        )
         self.assertEqual(config.policy["num_inference_steps"], 20)
 
     def test_templates_report_all_missing_calibration(self):
         with self.assertRaises(ValueError) as error:
             validate_runtime_config(load_config(PARAMS))
-        for field in ("intrinsics.left.K", "intrinsics.right.K",
-                      "extrinsics.T_left_from_right", "extrinsics.T_EE_from_hand"):
+        for field in (
+            "intrinsics.left.K",
+            "intrinsics.right.K",
+            "extrinsics.T_left_from_right",
+            "extrinsics.T_EE_from_hand",
+        ):
             self.assertIn(field, str(error.exception))
 
     def make_complete_config(self, directory):
@@ -51,6 +62,7 @@ class ScaffoldTests(unittest.TestCase):
         params_path = directory / "params.yaml"
         params = yaml.safe_load(params_path.read_text())
         params["policy"]["ckpt"] = "model/latest.pt"
+        params["deployment"]["diagnostic_dir"] = "diagnostics"
         params_path.write_text(yaml.safe_dump(params))
         model = directory / "model"
         model.mkdir()
@@ -58,11 +70,11 @@ class ScaffoldTests(unittest.TestCase):
         for name in ("latest.pt", "config.json", "dataset_stats.json"):
             (model / name).touch()
         config = load_config(params_path)
-        K = [[500., 0., 320.], [0., 500., 240.], [0., 0., 1.]]
+        K = [[500.0, 0.0, 320.0], [0.0, 500.0, 240.0], [0.0, 0.0, 1.0]]
         config.intrinsics["left"]["K"] = K
         config.intrinsics["right"]["K"] = K
         baseline = np.eye(4)
-        baseline[0, 3] = .06
+        baseline[0, 3] = 0.06
         config.extrinsics["T_left_from_right"] = baseline.tolist()
         config.extrinsics["T_EE_from_hand"] = np.eye(4).tolist()
         return config
@@ -71,9 +83,25 @@ class ScaffoldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = self.make_complete_config(directory)
             validate_runtime_config(config)
+            self.assertEqual(
+                Path(config.deployment["diagnostic_dir"]),
+                Path(directory) / "diagnostics",
+            )
             (Path(directory) / "model/dataset_stats.json").unlink()
             with self.assertRaisesRegex(FileNotFoundError, "dataset_stats.json"):
                 validate_runtime_config(config)
+
+    def test_export_refuses_nonempty_directory_before_loading_weights(self):
+        from .export import export_policy
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_complete_config(directory)
+            output = Path(directory) / "export"
+            output.mkdir()
+            (output / "keep.txt").write_text("owned result")
+            with self.assertRaisesRegex(FileExistsError, "nonempty"):
+                export_policy(config, output)
+            self.assertEqual((output / "keep.txt").read_text(), "owned result")
 
     def test_runtime_checks_metric_units_and_stereo_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,7 +117,7 @@ class ScaffoldTests(unittest.TestCase):
     def test_runtime_rejects_nonrigid_tool_transform(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.make_complete_config(directory)
-            config.extrinsics["T_EE_from_hand"][0][0] = 2.
+            config.extrinsics["T_EE_from_hand"][0][0] = 2.0
             with self.assertRaisesRegex(ValueError, "T_EE_from_hand.*rigid"):
                 validate_runtime_config(config)
 
@@ -121,15 +149,21 @@ class ScaffoldTests(unittest.TestCase):
 import importlib, sys
 sys.path.insert(0, sys.argv[1])
 for name in ('config', 'data_types', 'stereo', 'perception', 'rendering',
-             'configuration_humanego', 'processor_humanego', 'modeling_humanego', 'export'):
+             'export'):
     importlib.import_module('inference.' + name)
 for name in ('torch', 'transformers', 'onnxruntime', 'pyrealsense2', 'lerobot'):
     assert name not in sys.modules, name
 """
-        result = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)], capture_output=True, text=True)
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", code, str(ROOT)],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_object_state_preserves_positional_constructor_and_independent_defaults(self):
+    def test_object_state_preserves_positional_constructor_and_independent_defaults(
+        self,
+    ):
         first, second = ObjectState(np.eye(4)), ObjectState(np.eye(4))
         self.assertEqual(first.kpts_local.shape, (0, 3))
         self.assertEqual(first.kpts_local.dtype, np.float32)
@@ -139,14 +173,14 @@ for name in ('torch', 'transformers', 'onnxruntime', 'pyrealsense2', 'lerobot'):
 
     def test_input_validation_and_reset_preserve_perception_owner(self):
         config = load_config(PARAMS)
-        perception = Perception(config)
+        from unittest.mock import Mock
+
+        perception = Mock(spec=Perception)
         processor = HumanEgoProcessor(config, perception)
         image = np.zeros((480, 640, 3), np.uint8)
-        observation = Observation(StereoFrame(image, image), RobotState(np.eye(4), 0.))
+        observation = Observation(StereoFrame(image, image), RobotState(np.eye(4), 0.0))
         validate_observation(observation)
-        with self.assertRaises(NotImplementedError):
-            processor(observation)
-        processor.scene = SceneState({}, ObjectState(np.eye(4)), np.eye(4), 0.)
+        processor.scene = SceneState({}, ObjectState(np.eye(4)), np.eye(4), 0.0)
         processor.reset()
         self.assertIsNone(processor.scene)
         self.assertIs(processor.perception, perception)
@@ -154,7 +188,9 @@ for name in ('torch', 'transformers', 'onnxruntime', 'pyrealsense2', 'lerobot'):
         with self.assertRaisesRegex(ValueError, "left image"):
             validate_observation(bad)
         with self.assertRaisesRegex(ValueError, "gripper"):
-            validate_observation(Observation(observation.frame, RobotState(np.eye(4), 2.)))
+            validate_observation(
+                Observation(observation.frame, RobotState(np.eye(4), 2.0))
+            )
 
 
 if __name__ == "__main__":

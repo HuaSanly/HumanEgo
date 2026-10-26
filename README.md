@@ -274,46 +274,37 @@ full parameter reference, and how to add your own config.
 
 ### Step 4: Inference
 
-Deploy a trained policy on a real dual-arm robot. Every control step the policy
-consumes a **clean, embodiment-agnostic image** (the real arm inpainted out, a
-virtual gripper rendered in its place) and **Interaction-Centric Tokens (ICT)**
-(every hand and object as a 6DoF entity), and predicts a future end-effector
-trajectory that is smoothed and servoed to the arms in a closed loop:
+The remote-serving scaffold reuses **`inference/policy.py` as the only policy
+implementation**: checkpoint loading, image preparation, ICT construction,
+flow-matching integration and action decoding. The initial baseline is
+`runs/pick_cube/HumanEgo_anchor/latest.pt`, with synchronized, rectified **640×480
+RGB images per eye** and a single right-arm EE state/action contract.
 
-```
-camera ─▶ perception ─▶ clean image + ICT ─▶ policy ─▶ EE trajectory ─▶ robot ─▶ (loop)
-```
+Configuration lives in `cfg/inference/params.yaml`, `intrinsics.yaml` and
+`extrinsics.yaml`. From the repository root, inspect it without loading models:
 
 ```bash
-# install the hardware drivers (RealSense + Trossen) first:
-SKIP_HARDWARE=0 bash setup.sh
-# then run the dual-arm reference loop:
-python inference/run_inference.py cfg/inference/example_dualarm.yaml
+python -m inference.config --config_path cfg/inference/params.yaml
 ```
 
-**Pretrained checkpoints (no training required).** Our released policies live in the
-public HuggingFace **model** repo
-[`Leo-TX/HumanEgo`](https://huggingface.co/Leo-TX/HumanEgo). Each task folder ships
-`latest.pt` (inference weights) next to the `config.json` + `dataset_stats.json` the
-loader reads from the same directory. Download the `serve_bread` policy with:
+**This is currently a scaffold.** Stereo perception, clean-image rendering,
+native LeRobot registration and export remain explicit unimplemented interfaces.
+Calibration matrices are `null` until verified values are supplied; the old
+synchronous real-robot loop and hardware drivers have been removed. The existing
+simulator still shares the policy; its RGB-D lifting helpers are retained under
+`simulation/humanego_sim/legacy_inference/`.
+
+Released pretrained policies remain available from
+[`Leo-TX/HumanEgo`](https://huggingface.co/Leo-TX/HumanEgo). Each policy needs its
+`latest.pt`, `config.json` and `dataset_stats.json` together. For example:
 
 ```bash
 huggingface-cli download Leo-TX/HumanEgo --include "serve_bread/*" --local-dir ./checkpoints
-# → ./checkpoints/serve_bread/{latest.pt, config.json, dataset_stats.json}
 ```
 
-Then set `policy.ckpt: ./checkpoints/serve_bread/latest.pt` in your inference config
-(`cfg/inference/example_dualarm.yaml`). The same folder also carries `latest_full.pt`
-(optimizer state) if you'd rather resume training.
-
-The [`inference/`](inference/README.md) folder is a clean, hardware-agnostic
-**reference template** — it shows the standard structure rather than a turn-key
-script. Implement three interfaces (`Camera`, `RobotArm`, `Perception`) for your
-own rig and reuse the policy + control logic unchanged. You'll need a trained
-checkpoint, a camera + arm(s), and a hand-eye calibration (`T_base_in_cam`). See
-**[`inference/README.md`](inference/README.md)** for the full walk-through: frame
-conventions, the step-by-step pipeline, how to write your own
-camera/robot/perception drivers, and the parameter-tuning guide.
+See **[inference/README.md](inference/README.md)** for module boundaries, coordinate
+and image contracts, configuration validation, preserved policy behavior and
+remaining implementation work.
 
 ---
 

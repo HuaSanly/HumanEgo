@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # @FileName: policy.py
 """
-ICTPolicy — the model-side of HumanEgo inference (reference template).
+ICTPolicy — the shared HumanEgo policy implementation for serving and simulation.
 
 Wraps the trained FlowMatchingModel and exposes exactly what the robot loop needs:
 
@@ -13,7 +13,7 @@ Wraps the trained FlowMatchingModel and exposes exactly what the robot loop need
     infer          flow-matching ODE solve -> future hand trajectory + done
     decode_ee_in_cam   map a prediction back to an EE target in the camera frame
 
-This is a cleaned distillation of inference/InferencePolicy.py. It still reads
+This is a cleaned distillation of the original InferencePolicy.py. It still reads
 every architecture flag from the checkpoint's training config so it loads the
 real released checkpoints; it just drops the legacy-config auto-migration and
 the checkpoint-key auto-detection that the production loader adds for robustness.
@@ -45,7 +45,7 @@ from utils.utils_math import (
     unnormalize_pos,
 )
 
-from interfaces import ObjectState
+from .data_types import ObjectState
 
 
 def _inv(T: np.ndarray) -> np.ndarray:
@@ -56,8 +56,8 @@ class ICTPolicy:
     def __init__(self, cfg: dict, device: str = "cuda"):
         """
         Args:
-            cfg: the `policy` section of the inference config (see
-                 cfg/inference/example_dualarm.yaml). Must contain `ckpt`.
+            cfg: the `policy` section of cfg/inference/params.yaml, with paths
+                 resolved by inference.config.load_config. Must contain `ckpt`.
             device: 'cuda' or 'cpu'.
 
         Loads `config.json` + `dataset_stats.json` from next to the checkpoint
@@ -323,7 +323,7 @@ class ICTPolicy:
         pos: np.ndarray,                 # (3,) predicted normalized position (reference frame)
         o6d: np.ndarray,                 # (6,) predicted 6D rotation       (reference frame)
         anchor: Optional[ObjectState],   # anchor object (defines the reference frame)
-        T_align: np.ndarray,             # (4,4) HAND-frame -> EE-frame bridge (see run_inference.py)
+        T_align: np.ndarray,             # (4,4) HAND-frame -> EE-frame bridge (T_EE_from_hand)
     ) -> np.ndarray:
         """Map one (pos, o6d) prediction back to a 4x4 EE target in the camera frame.
 

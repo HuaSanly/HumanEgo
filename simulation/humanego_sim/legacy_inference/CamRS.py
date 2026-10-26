@@ -5,7 +5,7 @@ import argparse
 import pyrealsense2 as rs
 from typing import Any, Dict, List, Optional, Tuple
 
-from inference.CamRSTypes import CamRSStruct, CamRSData
+from .CamRSTypes import CamRSStruct, CamRSData
 
 from utils.utils_io import load_cfg
 
@@ -468,4 +468,4 @@ if __name__ == "__main__":
     # cam.list_all_rs_devices()
     cam.realtime_show()
 
-# python -m inference.CamRS
+# Historical camera implementation; only its lifting helpers are used by simulation.

@@ -1,0 +1,161 @@
+"""CPU-only checks for configuration readiness, input boundaries and imports."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+import numpy as np
+import yaml
+
+from .config import load_config, validate_runtime_config
+from .data_types import ObjectState, Observation, RobotState, SceneState, StereoFrame
+from .perception import Perception
+from .processor_humanego import HumanEgoProcessor, validate_observation
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PARAMS = ROOT / "cfg" / "inference" / "params.yaml"
+
+
+class ScaffoldTests(unittest.TestCase):
+    def test_paths_resolve_from_params_outside_repository_cwd(self):
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                config = load_config(PARAMS)
+            finally:
+                os.chdir(previous)
+        self.assertEqual(Path(config.policy["ckpt"]), ROOT / "runs/pick_cube/HumanEgo_anchor/latest.pt")
+        self.assertEqual(Path(config.camera["intrinsics_path"]), PARAMS.parent / "intrinsics.yaml")
+        self.assertEqual(Path(config.camera["extrinsics_path"]), PARAMS.parent / "extrinsics.yaml")
+        self.assertEqual(config.policy["num_inference_steps"], 20)
+
+    def test_templates_report_all_missing_calibration(self):
+        with self.assertRaises(ValueError) as error:
+            validate_runtime_config(load_config(PARAMS))
+        for field in ("intrinsics.left.K", "intrinsics.right.K",
+                      "extrinsics.T_left_from_right", "extrinsics.T_EE_from_hand"):
+            self.assertIn(field, str(error.exception))
+
+    def make_complete_config(self, directory):
+        directory = Path(directory)
+        for source in PARAMS.parent.glob("*.yaml"):
+            shutil.copyfile(source, directory / source.name)
+        params_path = directory / "params.yaml"
+        params = yaml.safe_load(params_path.read_text())
+        params["policy"]["ckpt"] = "model/latest.pt"
+        params_path.write_text(yaml.safe_dump(params))
+        model = directory / "model"
+        model.mkdir()
+        # Only exercise file readiness; these are not loadable model artifacts.
+        for name in ("latest.pt", "config.json", "dataset_stats.json"):
+            (model / name).touch()
+        config = load_config(params_path)
+        K = [[500., 0., 320.], [0., 500., 240.], [0., 0., 1.]]
+        config.intrinsics["left"]["K"] = K
+        config.intrinsics["right"]["K"] = K
+        baseline = np.eye(4)
+        baseline[0, 3] = .06
+        config.extrinsics["T_left_from_right"] = baseline.tolist()
+        config.extrinsics["T_EE_from_hand"] = np.eye(4).tolist()
+        return config
+
+    def test_ready_config_requires_checkpoint_sidecars(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_complete_config(directory)
+            validate_runtime_config(config)
+            (Path(directory) / "model/dataset_stats.json").unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "dataset_stats.json"):
+                validate_runtime_config(config)
+
+    def test_runtime_checks_metric_units_and_stereo_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_complete_config(directory)
+            config.extrinsics["translation_unit"] = "mm"
+            with self.assertRaisesRegex(ValueError, "translation_unit"):
+                validate_runtime_config(config)
+            config.extrinsics["translation_unit"] = "m"
+            config.extrinsics["T_left_from_right"] = np.eye(4).tolist()
+            with self.assertRaisesRegex(ValueError, "baseline"):
+                validate_runtime_config(config)
+
+    def test_runtime_rejects_nonrigid_tool_transform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_complete_config(directory)
+            config.extrinsics["T_EE_from_hand"][0][0] = 2.
+            with self.assertRaisesRegex(ValueError, "T_EE_from_hand.*rigid"):
+                validate_runtime_config(config)
+
+    def test_calibration_must_match_transmitted_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_complete_config(directory)
+            path = Path(config.camera["intrinsics_path"])
+            values = yaml.safe_load(path.read_text())
+            values["image_size_hw"] = [1200, 1600]
+            path.write_text(yaml.safe_dump(values))
+            with self.assertRaisesRegex(ValueError, "transmitted image size"):
+                load_config(config.source)
+
+    def test_malformed_calibration_names_the_invalid_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.make_complete_config(directory)
+            config.intrinsics["left"]["K"] = [["unknown"]]
+            with self.assertRaisesRegex(ValueError, "intrinsics.left.K.*numeric"):
+                validate_runtime_config(config)
+            path = Path(config.camera["intrinsics_path"])
+            values = yaml.safe_load(path.read_text())
+            values["left"] = None
+            path.write_text(yaml.safe_dump(values))
+            with self.assertRaisesRegex(ValueError, "intrinsics.left.*mapping"):
+                load_config(config.source)
+
+    def test_lightweight_imports_do_not_import_model_or_hardware_runtimes(self):
+        code = """
+import importlib, sys
+sys.path.insert(0, sys.argv[1])
+for name in ('config', 'data_types', 'stereo', 'perception', 'rendering',
+             'configuration_humanego', 'processor_humanego', 'modeling_humanego', 'export'):
+    importlib.import_module('inference.' + name)
+for name in ('torch', 'transformers', 'onnxruntime', 'pyrealsense2', 'lerobot'):
+    assert name not in sys.modules, name
+"""
+        result = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_object_state_preserves_positional_constructor_and_independent_defaults(self):
+        first, second = ObjectState(np.eye(4)), ObjectState(np.eye(4))
+        self.assertEqual(first.kpts_local.shape, (0, 3))
+        self.assertEqual(first.kpts_local.dtype, np.float32)
+        self.assertIsNot(first.kpts_local, second.kpts_local)
+        points = np.ones((3, 3))
+        self.assertIs(ObjectState(np.eye(4), points).kpts_local, points)
+
+    def test_input_validation_and_reset_preserve_perception_owner(self):
+        config = load_config(PARAMS)
+        perception = Perception(config)
+        processor = HumanEgoProcessor(config, perception)
+        image = np.zeros((480, 640, 3), np.uint8)
+        observation = Observation(StereoFrame(image, image), RobotState(np.eye(4), 0.))
+        validate_observation(observation)
+        with self.assertRaises(NotImplementedError):
+            processor(observation)
+        processor.scene = SceneState({}, ObjectState(np.eye(4)), np.eye(4), 0.)
+        processor.reset()
+        self.assertIsNone(processor.scene)
+        self.assertIs(processor.perception, perception)
+        bad = Observation(StereoFrame(image[:240], image), observation.robot)
+        with self.assertRaisesRegex(ValueError, "left image"):
+            validate_observation(bad)
+        with self.assertRaisesRegex(ValueError, "gripper"):
+            validate_observation(Observation(observation.frame, RobotState(np.eye(4), 2.)))
+
+
+if __name__ == "__main__":
+    unittest.main()

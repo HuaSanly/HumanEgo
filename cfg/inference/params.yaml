@@ -1,0 +1,35 @@
+# All file paths are relative to this params.yaml; array image sizes use H,W.
+policy:
+  ckpt: ../../runs/pick_cube/HumanEgo_anchor/latest.pt
+  num_inference_steps: 20
+  device: cuda
+
+camera:
+  image_size_hw: [480, 640]
+  intrinsics_path: intrinsics.yaml
+  extrinsics_path: extrinsics.yaml
+
+perception:
+  anchor_key: obj1
+  object_prompts:
+    obj1: "a blue plastic container ."
+    obj2: "a red block ."
+  erase_prompt: "a robot arm . a robot gripper ."
+  # Planned engines; the scaffold does not initialize or download them.
+  segmentation:
+    dino_model_id: IDEA-Research/grounding-dino-tiny
+    sam2_repo_id: facebook/sam2-hiera-tiny
+    box_threshold: 0.3
+  lama:
+    repo_id: Carve/LaMa-ONNX
+    filename: lama_fp32.onnx
+    input_size_hw: [512, 512]
+    mask_dilation: 9
+
+# These are the intended native remote settings, not an executable server config.
+# export.py will prepare the official deployment configuration in a later step.
+deployment:
+  name: humanego-pick-cube-anchor
+  mode: chunk
+  action_fps: 30.0
+  listen_endpoint: tcp/127.0.0.1:7447

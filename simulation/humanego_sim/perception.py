@@ -9,7 +9,7 @@ robot, using the *released* modules of this repo:
     masks        ground-truth segmentation       (replaces DINO-SAM; same output)
     split        connected components at split_x (shared_context: only obj1 is split)
     keypoints    preprocess/KptsSelector          (20 equidistant contour points)
-    3D lift      inference/CamRS.lift3d_for_multi_frames over N noisy depth frames
+    3D lift      retained CamRS.lift3d_for_multi_frames over N noisy depth frames
     filtering    postprocess_kpts_3d              (MAD gate + DBSCAN, ported)
     pose         preprocess/OrientAnything.estimate_frame_pca1
     mirroring    utils/utils_math.mirror_pose     (left arm sees a flipped world)
@@ -50,11 +50,11 @@ from preprocess.KptsSelector import KeypointsSelectorEngine  # noqa: E402
 from preprocess.OrientAnything import estimate_frame_pca1  # noqa: E402
 from preprocess.VisualKpts import VisualKptsEngine  # noqa: E402
 from utils.utils_math import mirror_intrinsics, mirror_pose  # noqa: E402
-from inference.CamRS import CamRS  # noqa: E402
+from .legacy_inference.CamRS import CamRS  # noqa: E402
 from utils.utils_io import load_cfg  # noqa: E402
 
 CFG_BASE = os.path.join(REPO_ROOT, "cfg", "preprocess", "base")
-CAM_CFG = os.path.join(REPO_ROOT, "cfg", "inference", "example_dualarm", "CamRS.yaml")
+CAM_CFG = os.path.join(os.path.dirname(__file__), "legacy_inference", "cfg", "CamRS.yaml")
 
 
 def _make_lifter() -> CamRS:

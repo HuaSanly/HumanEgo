@@ -1,212 +1,138 @@
-# Inference — Real-World Deployment
+# HumanEgo 远程推理服务端骨架
 
-This folder is a **reference template** for deploying a trained HumanEgo policy on
-a real dual-arm robot. It is intentionally clean and hardware-agnostic: it shows
-the *standard structure* of a HumanEgo inference stack so you can wire in **your
-own** camera, robot, and perception and reuse everything else.
+当前阶段已建立配置、数据类型和模块边界。原 `policy.py` 保留为唯一策略实现；
+双目感知、图像绘制、原生 LeRobot 注册及部署导出仍是显式未实现入口。
+这不是可直接启动的 remote 服务，也没有连接相机或机器人。
 
-> ⚠️ **It will not run out of the box.** It depends on physical hardware
-> (camera + arms), a hand-eye calibration, and heavy perception models. Treat it
-> as the blueprint to build your own deployment from — not a turn-key script. The
-> example uses the same hardware as the paper: **Intel RealSense + Trossen arms**,
-> with **DINO-SAM + LaMa** perception.
+## 基线与数据契约
 
----
+- checkpoint：`runs/pick_cube/HumanEgo_anchor/latest.pt`，配套读取同目录
+  `config.json`、`dataset_stats.json`，20 步 Euler ODE。
+- 单右手、absolute 动作、固定初始 anchor reference；头部、躯干、底盘在 episode 内静止。
+- 每眼传输 **640×480** 同步校正图；网络图像为 RGB uint8 `[480,640,3]`。
+  模型图像由原 `ICTPolicy.prepare_image()` 生成 RGB float `[1,3,240,320]`。
+- 当前右臂状态和单步目标均为 10 维：`[x,y,z,rot6d_0,...,rot6d_5,gripper]`。
+  位置单位米，rotation6d 为 `R[:, :2].reshape(-1)`，gripper 为 `0=开、1=闭`。
+- 对外位姿为左目校正 optical 系：X 向右、Y 向下、Z 向前；所有位姿使用右手 SE(3)。
+- `obj1` 是蓝色容器、`obj2` 是红色方块。ICT 顺序为右手、obj1、obj2、padding，
+  token 与 mask 形状分别为 `[1,8,20]`、`[1,8]`，region attention 使用 `[1,2]` anchor UV。
+- 动作块目标形状为 float32 `[1,50,10]`，30 Hz 对应约 1.67 秒预测范围。
+  时间戳同步及动作新鲜度最终由官方 remote 生命周期和新客户端共同保证。
 
-## The idea in one picture
+## 文件职责
 
-```
- camera ─▶ perception ─▶ clean image + ICT ─▶ policy ─▶ EE trajectory ─▶ robot
-    ▲                                                                      │
-    └──────────────────────────── close the loop ◀─────────────────────────┘
-```
+| 文件 | 职责与当前状态 |
+| --- | --- |
+| `policy.py` | **现有实现**：模型加载、图像准备、ICT、anchor UV、ODE 和动作解码 |
+| `config.py` | **已实现**：YAML 读取、相对路径解析、标定及权重文件就绪检查 |
+| `data_types.py` | **已定义**：双目、右臂状态、物体、场景和感知结果容器 |
+| `stereo.py` | **待实现**：双目深度与米制反投影 |
+| `perception.py` | **待实现**：物体初始化、追踪/抓取传播、双臂分割及 LaMa |
+| `rendering.py` | **待实现**：复现训练侧虚拟夹爪与物体关键点 |
+| `configuration_humanego.py` | 声明目标能力，**尚未注册为 LeRobot PreTrainedConfig** |
+| `processor_humanego.py` | 已有形状检查与场景 reset，**感知编排待实现** |
+| `modeling_humanego.py` | 持有单个 ICTPolicy，**官方 chunk 适配待实现** |
+| `export.py` | **待实现**：准备官方可加载的部署产物 |
 
-A HumanEgo policy consumes two things every step and predicts a future
-end-effector trajectory:
+各模块平铺。配置和数据模块导入不会加载模型；骨架模块不下载权重、不初始化 GPU、
+不连接硬件。调用未实现的业务入口会抛出 `NotImplementedError`，不会伪造图像或动作。
+`HumanEgoPolicy` 目前不是官方 `PreTrainedPolicy`，不能直接传给 `lerobot-policy-server`。
 
-1. **A clean, embodiment-agnostic RGB image** — the real arm is inpainted out and
-   a virtual gripper is rendered in its place (this closes the *visual gap* between
-   human-video training and robot deployment).
-2. **Interaction-Centric Tokens (ICT)** — a compact, viewpoint- and
-   embodiment-invariant encoding of every hand and object as a 6DoF entity plus
-   each hand's pose *relative to* that entity (this closes the *kinematic gap*).
+## 配置
 
-Because the ICT and clean image are built **identically** at train and test time,
-a policy trained purely on human egocentric video transfers to the robot.
+配置统一位于项目的 `cfg/inference/`：
 
----
+- `params.yaml`：策略、相机尺寸、感知及目标部署参数。
+- `intrinsics.yaml`：左右目**实际传输的校正图**的 3×3 内参，尺寸为 640×480。
+- `extrinsics.yaml`：`T_left_from_right` 与 `T_EE_from_hand`；平移单位米。
 
-## Files
-
-| File | Role |
-|------|------|
-| [`interfaces.py`](interfaces.py) | The 3 abstractions you implement: `Camera`, `RobotArm`, `Perception`. The loop is written entirely against these. |
-| [`policy.py`](policy.py) | `ICTPolicy`: load the checkpoint, `prepare_image`, `build_ict` (dual-arm), flow-matching `infer`, decode to camera-frame EE targets. |
-| [`controller.py`](controller.py) | `TrajectoryController`: smooth (EMA + Slerp) + rate-limit predictions and servo the arms (receding horizon). |
-| [`run_inference.py`](run_inference.py) | The main loop wiring it all together, plus example hardware adapters and a reference perception. |
-| [`../cfg/inference/example_dualarm.yaml`](../cfg/inference/example_dualarm.yaml) | One annotated config for the whole stack. |
-| `CamRS.py`, `RobotArmTrossen.py` | **Example** drivers (RealSense / Trossen) you can adapt to your own hardware. |
-
----
-
-## Read this first — frame & unit conventions
-
-Most deployment bugs are frame bugs. The contract (see `interfaces.py`):
-
-- **Poses are 4×4 SE(3) matrices, positions in meters, rotations proper.**
-- **`_in_cam` = the camera optical frame** (OpenCV: +x right, +y down, +z forward).
-  This is the single shared "world" frame for one episode.
-- **`T_base_in_cam`** (per arm) — the **hand-eye extrinsic** placing the robot base
-  in the camera frame. Get it from a hand-eye calibration. A wrong extrinsic is the
-  #1 cause of "the robot moves to the wrong place".
-- **`T_align`** — bridges *your* end-effector frame to the **"hand" frame the model
-  was trained on**. Identity if you trained on robot/teleop data in the same EE
-  convention; for the released Aria-MPS checkpoints use the fixed rotation provided
-  in [`example_dualarm.yaml`](../cfg/inference/example_dualarm.yaml) (the `T_align`
-  block). Wrong `T_align` ⇒ orientations are systematically off.
-
----
-
-## The pipeline, step by step
-
-**One-time, at episode start** (`run_inference.py: run()`):
-
-1. **Estimate object poses** — `Perception.estimate_objects()` detects+segments each
-   object, lifts mask pixels to 3D via depth, and fits a 6DoF pose. The **anchor**
-   object (`obj1`) defines the object-centric reference frame the ICTs use.
-2. **Home** the arms and open grippers.
-
-**Every step, closed-loop** (~5–10 Hz):
-
-| # | What | Where |
-|---|------|-------|
-| 3 | Grab an RGB-D frame | `Camera.get_frame()` |
-| 4 | Read each arm's EE pose (FK) + gripper, bridge by `T_align` → **hand poses** | `RobotArm.get_T_ee_in_cam()` |
-| 5 | **Latch** grasped objects so their pose tracks the gripper | `run_inference.py: latch_objects()` |
-| 6 | Build the **clean image** (inpaint arm + render virtual gripper) | `Perception.make_clean_image()` |
-| 7 | Build the **ICT** from hand + object poses | `ICTPolicy.build_ict()` |
-| 8 | **Flow-matching inference** → future EE trajectory + done prob | `ICTPolicy.infer()` |
-| 9 | **Decode** reference-frame prediction → camera-frame EE targets | `ICTPolicy.decode_ee_in_cam()` |
-| 10 | Smooth + execute the first `exec_horizon` steps, then re-plan | `TrajectoryController.execute_chunk()` |
-| 11 | Stop when `done_prob > done_threshold` | `run_inference.py: run()` |
-
-### How the ICT is built (the core)
-
-`ICTPolicy.build_ict()` mirrors `training/FlowMatchingDataloader._build_ict()` exactly.
-Each entity (hand or object) becomes one token:
-
-```
-[ type_id(1) | pose_in_ref(9) | hand-in-entity(9 single / 18 dual) | flag(1) ]
-```
-
-- `pose_in_ref` — the entity's 6DoF pose in the reference frame, encoded as
-  `[normalized position(3), 6D rotation(6)]`.
-- `hand-in-entity` — each hand's pose **expressed in that entity's frame**. This
-  relative encoding is what makes the representation *interaction*-centric and
-  invariant to where the camera/robot is.
-- Token order is fixed: **hand(s) first, then the anchor object, then the rest** —
-  it must match training.
-
-### How the robot moves
-
-The policy predicts the future **hand** trajectory in the reference frame. To
-command the arm, each step is mapped back (`decode_ee_in_cam`):
-
-```
-pred (hand pose in REF) --T_ref_in_cam--> hand pose in CAM --inv(T_align)--> EE pose in CAM
-```
-
-`TrajectoryController` then EMA-smooths position, Slerp-smooths rotation, clamps
-the per-step motion (safety cage), and calls `RobotArm.move_ee_in_cam(...)`
-non-blocking, plus opens/closes the gripper by thresholding the predicted grasp
-probability. Only the first `exec_horizon` steps run before the loop re-plans on a
-fresh observation — this **receding horizon** keeps the policy reactive.
-
----
-
-## How to run
-
-**Prerequisites**
-
-1. A trained checkpoint with `config.json` **and** `dataset_stats.json` next to it
-   (the trainer writes these; they carry the architecture + normalization).
-2. Hardware drivers installed: `SKIP_HARDWARE=0 bash setup.sh` (RealSense + Trossen).
-3. Your perception models (the reference uses DINO-SAM + LaMa from `preprocess/`).
-4. A **hand-eye calibration** → `T_base_in_cam` for each arm.
-
-**Configure** — edit [`../cfg/inference/example_dualarm.yaml`](../cfg/inference/example_dualarm.yaml):
-set `policy.ckpt`, the `perception.object_prompts` / `erase_prompt`, the camera and
-robot `cfg_path`s, and `robot.T_align`.
-
-**Run**
+所有文件路径相对于 `params.yaml` 所在目录解析，与启动工作目录无关。
+模型维度、手部模式和归一化继续由原 policy 从 checkpoint sidecar 读取。
+`deployment` 是规划参数，尚不是官方可直接消费的 server YAML。
 
 ```bash
-python inference/run_inference.py cfg/inference/example_dualarm.yaml
+# 从项目根目录读取配置；允许检查含 null 的标定模板，不加载任何模型
+python -m inference.config --config_path cfg/inference/params.yaml
+
+# 部署前的配置就绪检查；默认模板会明确报告缺失标定
+python -m inference.config --config_path cfg/inference/params.yaml --validate-runtime
 ```
 
----
+实际标定尚未提供，因此矩阵保持 `null`。不得用单位矩阵或旧客户端常量替代实测标定。
+`validate_runtime_config()` 检查矩阵、单位、非零基线及 checkpoint 三个文件；
+检查通过也不代表原生适配、感知或物理标定已经验收。
 
-## Configuration & tuning
+内参必须匹配缩放后的像素坐标。若从其它尺寸缩到 640×480，后续实现统一使用：
 
-All knobs live in `example_dualarm.yaml`. The ones you will actually tune:
+```text
+A = [[sx, 0, (sx-1)/2], [0, sy, (sy-1)/2], [0, 0, 1]]
+K_new = A @ K_source
+P_new = A @ P_source
+```
 
-| Knob | Section | Effect |
-|------|---------|--------|
-| `num_inference_steps` | `policy` | Flow ODE steps. 10–20. ↑ = smoother actions, slower. |
-| `exec_horizon` | `control` | Predicted steps run before re-planning. ↓ = more reactive/closed-loop. |
-| `control_hz` | `control` | Control-loop rate (sets `dt`). Match to your arm's servo rate. |
-| `alpha_pos` / `alpha_rot` | `control` | EMA / Slerp smoothing. ↑ = smoother but laggier. |
-| `max_pos_step` | `control` | Safety cage: max EE move per step (m). Keep small at first. |
-| `grasp_threshold` | `control` | Predicted grasp prob above which the gripper closes. |
-| `done_threshold` | `control` | Done prob above which the episode stops. |
-| `safe_z_min` | `control` | Intended base-frame Z floor (table protection). **Note:** this template does not yet wire the value through to the driver — the Trossen example enforces its own −0.12 m floor — so rely on your driver's floor + e-stop and set conservatively. |
+输入已经校正，外参也必须连接对应的校正 optical 系。图像缩放不改变三维位置、
+基线或工具变换。骨架没有实现标定缩放或双目重建；640 下的定位精度需要实测。
 
-**Bring-up tip:** start with a *low* `control_hz`, *small* `max_pos_step`, and a
-high `safe_z_min`, hand on the e-stop. Loosen once the motion looks right.
+## 数据流与策略复用
 
----
+```text
+同步原始双目与右臂状态
+  → processor 校验
+  → perception 初始化/更新场景
+  → 分割双臂和夹爪 → LaMa 修复左图
+  → rendering 绘制虚拟右手和物体关键点
+  → PreparedObservation
+  → 原 policy.prepare_image / build_ict / compute_anchor_uv
+  → 原 policy.infer
+  → 原 policy.decode_ee_in_cam
+  → 适配层整理为 [1,50,10]
+  → 官方 remote 传输与动作运行时
+```
 
-## Single-arm vs dual-arm
+processor 不构建第二套 ICT，也不加载策略。modeling 只转发，不重新构建网络、
+归一化或 ODE。最终入口使用官方 `lerobot-policy-server`，不实现自定义网络服务、
+动作队列或电机控制器；本轮没有安装、注册或验证该运行时。
 
-This template defaults to **dual-arm** (`robot.sides: ["left", "right"]`,
-`single_hand: false` in the training config → `ict_dim = 29`, both hand
-trajectories predicted in one forward pass). For **single-arm**, set
-`robot.sides: ["right"]` and use a checkpoint trained with `single_hand: true`
-(`ict_dim = 20`). `ICTPolicy` reads `single_hand` from the checkpoint's
-`config.json`, so the token layout and trajectory unpacking follow automatically.
+`T_EE_from_hand` 将模型 hand 局部坐标映到真实 EE，包含工具平移与旋转：
 
----
+```text
+T_cam_hand = T_cam_EE @ T_EE_from_hand
+T_cam_EE_target = T_cam_hand_target @ inverse(T_EE_from_hand)
+```
 
-## Writing your own camera / robot / perception
+`SceneState.reference_anchor` 必须是初始 obj1 位姿的独立副本。`objects` 保存物体
+当前位姿；初始化后移动物体不能修改 reference。编码调用现有
+`build_ict(..., reference_anchor=scene.reference_anchor)`；解码也传同一固定 reference。
+`anchor_uv` 则投影当前 anchor 实体。clean image 与 ICT 必须使用同一份场景状态。
+物体局部关键点后续按当前 pose 重投影，不能一直缓存首次像素位置。
 
-Implement the three interfaces in `interfaces.py` — that's the whole porting job:
+后续感知将从**原始双目**估计物体几何；LaMa 修复像素不参与深度测量。
+抓取时锁定手到物体的相对变换，释放后保留最新物体状态再视觉重定位。
+`HumanEgoProcessor.reset()` 清空整个场景，保留传入的 perception 实例。
 
-- **`Camera`** → return `Frame(rgb, depth_m, K)`. See `RealSenseCamera` in
-  `run_inference.py` wrapping `CamRS`.
-- **`RobotArm`** → FK (`get_T_ee_in_cam`), Cartesian servo (`move_ee_in_cam`),
-  gripper, `go_home`, and the `T_base_in_cam` extrinsic. See `TrossenArm` wrapping
-  `RobotArmTrossen`. Cartesian IK is your driver's job.
-- **`Perception`** → object 6DoF poses + a clean image. This is the heaviest part.
-  Any source of object poses works (open-vocab detector + PCA on depth keypoints, an
-  AprilTag, FoundationPose, known CAD + ICP, …). The clean image must match how your
-  model was trained (same inpainting + gripper rendering as `preprocess/`).
+## 与仿真的关系
 
----
+仿真继续共享 `inference.policy.ICTPolicy` 和 `inference.data_types.ObjectState`。
+`ObjectState` 的字段顺序、构造方式和含义保持兼容。
+旧 RGB-D 相机及多帧反投影辅助代码和相机配置迁至
+`simulation/humanego_sim/legacy_inference/`；新服务端不依赖这些硬件辅助代码。
+旧同步实机循环、控制器和 Trossen 驱动已移除。
 
-## What this template leaves out
+## 本轮保留的行为与后续验证
 
-To keep the idea legible, this reference template intentionally omits several pieces
-from our internal production loop (not part of this release):
+原 policy 的函数体、权重加载、固定噪声、Euler ODE、夹爪 sigmoid 和 done 解码保持不变。
+以下问题需要后续独立验证，本轮不夹带算法修改：
 
-- **Async control + temporal ensembling** — a worker thread servoing at a fixed rate
-  decoupled from (slower) inference, averaging overlapping predictions for smoother
-  motion.
-- **Delta action mode**, PCD features, region attention, object-dynamics & visual-
-  foresight auxiliary heads — all supported by the model; here we run the common
-  absolute-action path.
-- **Robustness/UX**: keyboard tele-override, live visualization, post-grasp forced
-  lift, IK-failure escape, interactive extrinsic calibration, grasp latching across
-  occlusion, checkpoint architecture auto-detection.
+1. 训练 grasp target 为 0/1，而模板推理又做 sigmoid；先核验该权重的开合样本。
+2. 训练绘图和旧单帧夹爪 helper 的局部延伸轴分别为 -Y 和 -Z，需要重绘对照。
+3. 640 分辨率的双目精度、PCA 物体系定义、mask 对物体的保护和工具中心重投影。
+4. 原生 LeRobot 配置/processor 注册、预热、部署导出、动作块和 reset 回环。
 
-Start from this template, get a single arm reaching to an object, then layer these on
-as you need them.
+测试骨架与仿真兼容性（使用包含现有仿真依赖的 Python 环境）：
+
+```bash
+python -m unittest inference.test_scaffold -v
+python -m pytest simulation/tests/test_reference_frames.py simulation/tests/test_perception_geometry.py -q
+```
+
+骨架通过测试不表示完成真实感知、remote 接入或机器人任务成功率验证。

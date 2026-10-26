@@ -33,11 +33,10 @@ from .driver import T_to_p
 from .env import REPO_ROOT, ServeBreadSim
 from .perception import SideObjects, SimPerception, mirror_pose, split_mask_by_x
 
-for _p in (os.path.join(REPO_ROOT, "inference"), REPO_ROOT):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-from interfaces import ObjectState  # noqa: E402  (released inference template)
-from policy import ICTPolicy  # noqa: E402
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from inference.data_types import ObjectState  # noqa: E402
+from inference.policy import ICTPolicy  # noqa: E402
 
 T_ALIGN_ARIA = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.float64)
 

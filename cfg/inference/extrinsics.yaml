@@ -1,0 +1,6 @@
+# T_A_from_B maps coordinates expressed in B into A. All translations are metres.
+translation_unit: m
+# Between the RECTIFIED optical frames corresponding to intrinsics.yaml.
+T_left_from_right: null
+# Model hand -> measured robot EE; includes the grasp-centre tool offset.
+T_EE_from_hand: null

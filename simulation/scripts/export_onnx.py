@@ -21,8 +21,8 @@ import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-sys.path[:0] = [os.path.join(ROOT, "inference"), ROOT]
-from policy import ICTPolicy  # noqa: E402
+sys.path.insert(0, ROOT)
+from inference.policy import ICTPolicy  # noqa: E402
 
 
 class Rollout(torch.nn.Module):

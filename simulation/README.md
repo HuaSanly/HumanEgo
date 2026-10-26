@@ -3,9 +3,11 @@
 Closed-loop simulation of the **released HumanEgo `serve_bread` policy** on a physics
 replica of the real deployment rig: two Trossen WidowX AI arms and a top-mounted
 Intel RealSense D405, placed by the **real hand-eye calibration**. The network is never
-touched — the simulator plugs into the same `Camera` / `RobotArm` / `Perception`
-contract as [`inference/`](../inference/README.md) and runs the released `ICTPolicy` on
-the released checkpoint.
+touched — the simulator shares [`inference/policy.py`](../inference/policy.py)'s
+`ICTPolicy` and `ObjectState` with the new remote-serving scaffold. Its original
+RGB-D lifting helpers and camera configuration live in
+`humanego_sim/legacy_inference/`; the remote-serving scaffold does not own hardware
+drivers. The simulation policy and controller behavior are unchanged.
 
 **Interactive page:** <https://humanego-ai.github.io/sim/> — replay pre-computed rollouts
 in 3D, or switch to **Live** and run the policy *in your browser* (MuJoCo WebAssembly +

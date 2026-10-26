@@ -1,0 +1,8 @@
+# Intrinsics for the images ACTUALLY transmitted, after rectification/resizing.
+# Fill from verified calibration; do not copy values for another resolution.
+image_size_hw: [480, 640]
+rectified: true
+left:
+  K: null  # 3x3, left rectified optical camera, pixel units
+right:
+  K: null  # 3x3, right rectified optical camera, pixel units

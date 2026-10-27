@@ -4,7 +4,7 @@
 
 使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，入口为原生 `lerobot-policy-server`，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
 
-软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。具体结果见 [VALIDATION.md](VALIDATION.md)。BRX 左右目外参目前是 URDF 名义候选值；内参和 hand 变换仍为 `null`，默认生产配置不能启动。真机闭环和任务成功率另行验收。
+软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 左右目外参目前是 URDF 名义候选值；内参和 hand 变换仍为 `null`，默认生产配置不能启动。真机闭环和任务成功率另行验收。
 
 ## 环境与安装
 
@@ -55,32 +55,9 @@ lerobot-policy-server --config_path /new/location/server.yaml \
 
 原 checkpoint 的两个 sidecar 原样保存，其中历史训练数据路径只是训练元数据，推理不会访问它们。请使用 `humanego-export` 准备部署产物。
 
-## 新客户端契约
+## 客户端接口
 
-本实现没有读取或沿用旧客户端。新客户端按照导出 `server.yaml` 的有序 FeatureSpec 和 `manifest.json` 实现；服务端采用 `humanego_brx` robot type 及版本化语义标识，不能只按维度判断兼容。
-
-| Feature | 网络值 | 含义 |
-| --- | --- | --- |
-| `observation.images.head_left` | `[480,640,3]` RGB uint8 | 左目校正图 |
-| `observation.images.head_right` | `[480,640,3]` RGB uint8 | 与左目同步的右目校正图 |
-| `observation.state` | `[10]` float32 | 实测右臂 EE 位姿和实测归一化夹爪状态 |
-| `action` | `[50,10]` float32 网络动作块 | 50 个 absolute EE 目标和原策略连续 grasp 输出 |
-
-适配层内部的原生输出为 `[1,50,10]`；官方运行时去掉 batch 维后传输。每步分量依次为：
-
-```text
-[x, y, z, R00, R01, R10, R11, R20, R21, grasp]
-```
-
-位置单位米，所有 EE 位姿使用**左目校正 optical 坐标系**：X 右、Y 下、Z 前。rotation6d 必须是 `R[:, :2].reshape(-1)` 的 row-major 展平，前两列为单位正交列，第三列由叉积恢复。状态末维为实测 `0=开、1=闭`；动作末维则是原策略连续 sigmoid grasp，逐值透传，由新客户端定义实际开合映射。不要将其直接当作电机开度标定值。
-
-BRX 右臂的 EE 约定为两个夹爪接触点的抓取中心。EE 轴与模型 hand 轴对齐：+X 沿夹爪开合方向，+Y 从夹爪底座指向抓取中心，+Z 按右手系确定。相对于 URDF 的 `LinearclampinggripperJZ01_Link`，当前候选方向为 EE +X 对应夹爪底座 +Y、EE +Y 对应底座 +X、EE +Z 对应底座 −Z；夹爪两侧的方向和沿指方向的具体接触位置仍需结合实机确认。客户端须发送这个 EE 的实测位姿，不能直接发送 `ArmR08_Link` 或夹爪底座位姿。
-
-如果最终确定 EE 与模型 hand 的原点和轴向完全重合，`T_EE_from_hand` 可设为 4×4 单位矩阵；当前仍保留 `null`，待上述约定核实。客户端发送 EE 位姿，服务端乘 `T_EE_from_hand` 得到 hand 位姿；预测后乘该矩阵的逆，返回 EE 目标位姿，客户端不应提前做 hand 转换。
-
-头部、躯干和底盘在一个 episode 内必须静止。左右图和 EE 状态应在同一采样时刻获得，调用方保留原始单调 capture time，并交给官方 runtime 进行新鲜度检查。几何计算只使用原始双目，服务端中间的场景、修复图、ICT 和 done 不进入协议。
-
-新客户端通过官方 remote discovery/admission 校验 semantics、features、模式、fps，再提交观测。reset 开始新 episode，会清空 reference、物体与抓取关联；不要用普通补货请求代替 reset。建议首轮使用 lossless raw 图像编码，与本次验收一致。端点默认 `tcp/127.0.0.1:7447`，跨主机部署时显式设置监听端点与官方 Zenoh 网络配置。
+通信、观测与动作格式、坐标及 EE 约定见 [客户端适配接口](CLIENT_INTERFACE.md)。
 
 ## 模块和执行链
 
@@ -124,5 +101,3 @@ DINO 与 SAM 默认分别使用 `segmentation.dino_precision: float16`、`sam_pr
 训练 grasp target 与原推理 sigmoid 的关系仍待真机开合样本核验。本轮验证样本的连续输出约在 0.50–0.73，服务端没有通过修改算法或阈值处理这个现象。done 仅记录日志。几何/软件回归不代表 BRX 标定精度或任务成功率。
 
 仿真继续共享 `inference.policy.ICTPolicy` 和兼容的 `ObjectState`。旧相机辅助代码保存在 `simulation/humanego_sim/legacy_inference/`，新服务端不依赖它们。
-
-分阶段计时和官方回环比较见 [LATENCY.md](LATENCY.md)。计时工具逐阶段同步 CUDA，仅用于性能诊断；正常服务没有这些额外同步。

@@ -1,5 +1,7 @@
 # 服务端实现验收记录
 
+2026-10-27 补充：事件触发物体定位与 FP16 感知已完成真实 GPU 和官方回环验证，稳定回环均值 588 ms。详见 [LATENCY.md](LATENCY.md)；下文保留首版 continuous / FP32 的历史验收数据。
+
 验证日期：2026-10-26。实现分支：`codex/humanego-remote-inference`。
 
 ## 环境与产物

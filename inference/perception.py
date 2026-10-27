@@ -1,6 +1,7 @@
 """Persistent GPU vision, metric object updates and episode grasp association."""
 
 from copy import deepcopy
+from contextlib import nullcontext
 import logging
 import time
 
@@ -26,6 +27,11 @@ class Segmentation:
         self.device = config.policy["device"]
         opts = config.perception["segmentation"]
         self.threshold = opts["box_threshold"]
+        self.dino_precision = opts.get("dino_precision", "float32")
+        self.sam_precision = opts.get("sam_precision", "float32")
+        for precision in (self.dino_precision, self.sam_precision):
+            if precision not in ("float32", "float16", "bfloat16"):
+                raise ValueError(f"Unsupported segmentation precision: {precision}")
         self.processor = AutoProcessor.from_pretrained(
             opts["dino_model_id"], revision=opts["dino_revision"], backend="pil"
         )
@@ -48,21 +54,30 @@ class Segmentation:
             )
         )
 
-    def segment(self, rgb, object_prompts, erase_prompt):
+    def _autocast(self, precision):
+        import torch
+
+        if precision == "float32":
+            return nullcontext()
+        return torch.autocast(
+            device_type=torch.device(self.device).type, dtype=getattr(torch, precision)
+        )
+
+    def segment(self, rgb, object_prompts, erase_prompt, object_boxes=None):
         import torch
         from PIL import Image
 
         with torch.inference_mode():
-            self.sam.set_image(
-                rgb
-            )  # SAM2's public interface expects RGB, with no BGR flag.
+            with self._autocast(self.sam_precision):
+                self.sam.set_image(rgb)
             masks = {}
             prompts = {**object_prompts, "arms": erase_prompt}
             for key, prompt in prompts.items():
                 batch = self.processor(
                     images=Image.fromarray(rgb), text=prompt, return_tensors="pt"
                 ).to(self.device)
-                output = self.model(**batch)
+                with self._autocast(self.dino_precision):
+                    output = self.model(**batch)
                 scores = output.logits.sigmoid().amax(-1)[0]
                 keep = scores > self.threshold
                 boxes = output.pred_boxes[0, keep]
@@ -76,9 +91,18 @@ class Segmentation:
                 xyxy *= xyxy.new_tensor(
                     [rgb.shape[1], rgb.shape[0], rgb.shape[1], rgb.shape[0]]
                 )
-                result, _, _ = self.sam.predict(
-                    box=xyxy.cpu().numpy(), multimask_output=False
-                )
+                with self._autocast(self.sam_precision):
+                    result, _, _ = self.sam.predict(
+                        box=xyxy.float().cpu().numpy(), multimask_output=False
+                    )
+                masks[key] = np.any(result.reshape(-1, *rgb.shape[:2]), axis=0)
+            # Existing metric poses provide prompts without another DINO forward.
+            for key, box in (object_boxes or {}).items():
+                if box is None:
+                    masks[key] = np.zeros(rgb.shape[:2], bool)
+                    continue
+                with self._autocast(self.sam_precision):
+                    result, _, _ = self.sam.predict(box=box, multimask_output=False)
                 masks[key] = np.any(result.reshape(-1, *rgb.shape[:2]), axis=0)
         return masks
 
@@ -167,33 +191,61 @@ class Perception:
         self.masks = None
         self.diagnostics = {}
 
-    def observe(self, observation):
+    def observe(self, observation, object_keys=("obj1", "obj2"), scene=None):
         """The original stereo and segmentation share one capture, before inpainting."""
         start = time.perf_counter()
+        prompts = {
+            key: self.config.perception["object_prompts"][key] for key in object_keys
+        }
+        boxes = (
+            None
+            if scene is None
+            else {
+                key: self._object_box(obj)
+                for key, obj in scene.objects.items()
+                if key not in object_keys
+            }
+        )
         masks = self.segmentation.segment(
             observation.frame.left_rgb,
-            self.config.perception["object_prompts"],
+            prompts,
             self.config.perception["erase_prompt"],
+            **({"object_boxes": boxes} if boxes is not None else {}),
         )
         self.masks = masks
-        depth = self.stereo.estimate(observation.frame)
+        depth = self.stereo.estimate(observation.frame) if object_keys else None
         points = {
-            key: self.stereo.points_from_mask(depth, masks[key])
-            for key in ("obj1", "obj2")
+            key: self.stereo.points_from_mask(depth, masks[key]) for key in object_keys
         }
         self.diagnostics = {
+            "localized_objects": list(object_keys),
             "valid_points": {k: len(v) for k, v in points.items()},
             "mask_pixels": {k: int(v.sum()) for k, v in masks.items()},
             "geometry_segmentation_s": time.perf_counter() - start,
         }
         return points
 
+    def _object_box(self, obj):
+        points = obj.kpts_local @ obj.T_in_cam[:3, :3].T + obj.T_in_cam[:3, 3]
+        points = points[points[:, 2] > 0]
+        if len(points) < 3:
+            return None
+        uv = points @ self.stereo.K.T
+        uv = uv[:, :2] / uv[:, 2:]
+        low = np.maximum(uv.min(axis=0) - 4, [0, 0])
+        high = np.minimum(uv.max(axis=0) + 4, [639, 479])
+        return (
+            np.concatenate([low, high]).astype(np.float32)
+            if np.all(high > low)
+            else None
+        )
+
     def _locate(self, points, existing=None):
         from preprocess.OrientAnything import estimate_frame_pca1
 
         objects = {}
         for key in ("obj1", "obj2"):
-            pts = points[key]
+            pts = points.get(key, [])
             if len(pts) < 8:
                 continue
             anchor = objects.get("obj1") or (existing or {}).get("obj1")
@@ -242,31 +294,44 @@ class Perception:
             self.config.extrinsics["T_EE_from_hand"]
         )
         scene.gripper = observation.robot.gripper
-        visible = self._locate(self.observe(observation), scene.objects)
+        events = (
+            self.config.perception.get("object_update_mode", "continuous") == "events"
+        )
         held = scene.latched_object
         if held:
             scene.objects[held].T_in_cam = scene.hand_in_cam @ scene.T_object_in_hand
             scene.last_seen[held] = now
             if scene.gripper <= 0.5:
                 scene.latched_object, scene.T_object_in_hand = None, None
+                scene.relocalization_started[held] = now
+        if events:
+            points = self.observe(
+                observation, tuple(scene.relocalization_started), scene
+            )
+        else:
+            points = self.observe(observation)
+        visible = self._locate(points, scene.objects)
         for key, obj in visible.items():
             if key != scene.latched_object:
                 scene.objects[key] = obj
                 scene.last_seen[key] = now
-        self._associate(scene, now)
+                scene.relocalization_started.pop(key, None)
+        self._associate(scene, now, require_fresh=not events)
         ttl = self.config.perception.get("object_ttl_s", 1.0)
-        for key in ("obj1", "obj2"):
-            if key != scene.latched_object and now - scene.last_seen[key] > ttl:
+        deadlines = scene.relocalization_started if events else scene.last_seen
+        for key, last_valid in deadlines.items():
+            if key != scene.latched_object and now - last_valid > ttl:
                 raise ValueError(f"{key}: visual localization expired after {ttl}s")
         return scene
 
     @staticmethod
-    def _associate(scene, now):
+    def _associate(scene, now, require_fresh=True):
         if scene.latched_object is not None or scene.gripper <= 0.5:
             return
-        # Never latch a stale object that was last observed before the grasp.
+        # Event mode assumes stationary unheld objects; pending relocation is untrusted.
         if (
-            scene.last_seen["obj2"] == now
+            "obj2" not in scene.relocalization_started
+            and (not require_fresh or scene.last_seen["obj2"] == now)
             and np.linalg.norm(
                 scene.objects["obj2"].T_in_cam[:3, 3] - scene.hand_in_cam[:3, 3]
             )

@@ -10,6 +10,8 @@ camera:
   intrinsics_path: intrinsics.yaml
   extrinsics_path: extrinsics.yaml
 perception:
+  # Stationary unheld objects; release triggers obj2 relocalization.
+  object_update_mode: events
   object_ttl_s: 1.0
   stereo:
     depth_range_m:
@@ -27,6 +29,8 @@ perception:
     sam2_revision: 7c218beaf0bb87874785f32b582f640134fc1c09
     sam2_repo_id: facebook/sam2-hiera-tiny
     box_threshold: 0.3
+    dino_precision: float16
+    sam_precision: float16
   lama:
     repo_id: Carve/LaMa-ONNX
     revision: c3c0c9e468934d62e79c329e35d82dd09ff8c444

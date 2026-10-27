@@ -93,7 +93,7 @@ lerobot-policy-server --config_path /new/location/server.yaml \
 同步 RGB 双目 + 实测右 EE 状态
 → 检查尺寸、有限值、SE(3)、夹爪范围
 → 实测 EE × T_EE_from_hand
-→ 分割、原始双目几何、初始化/更新物体
+→ 机械臂分割；初始化/释放时执行物体检测和原始双目几何
 → 去臂、LaMa、保护可见物体、训练画布绘图
 → 原 policy.prepare_image() → 320×240 RGB 模型图
 → 原 build_ict(固定 reference) / compute_anchor_uv(当前 obj1)
@@ -101,18 +101,22 @@ lerobot-policy-server --config_path /new/location/server.yaml \
 → float32 [1,50,10]，连续 grasp 不变
 ```
 
-初始化必须获得 obj1 蓝色容器和 obj2 红块，每个物体至少 8 个有效三维关键点。初始 obj1 被独立复制为 reference，之后物体位置更新不会改写它。每帧重新分割和定位可见物体；局部关键点与最近观测时间随状态更新。
+初始化必须获得 obj1 蓝色容器和 obj2 红块，每个物体至少 8 个有效三维关键点。初始 obj1 被独立复制为 reference，之后物体位置更新不会改写它。默认 `object_update_mode: events`：初始化分别检测 obj1、obj2、机械臂，共三次 DINO；之后每帧仅检测机械臂一次，并跳过双目深度计算。该模式要求未抓取物体保持静止；外力移动物体后需要 reset 重新建立场景。`continuous` 可恢复逐帧定位。
 
-只有 obj2 可被抓取关联：实测夹爪闭合且模型 hand 与物体距离小于 0.20m 时锁定相对变换，遮挡期间用实测手位姿传播；释放后保留末次位置并恢复视觉定位。未抓取物体最多沿用最近状态 1 秒，超时明确失败。
+只有 obj2 可被抓取关联：实测夹爪闭合且模型 hand 与物体距离小于 0.20m 时锁定相对变换，遮挡期间用实测手位姿传播；释放后保留末次位置并恢复视觉定位。释放触发 obj2 重新检测和双目定位；失败时逐请求重试，超过 `object_ttl_s`（默认 1 秒）明确失败。主动跳过检测的静止物体不计为视觉丢失，也不伪造新的观测时间。`continuous` 模式仍保留原来的逐帧定位与 1 秒丢失超时。
 
-每帧 SAM 只编码一次 RGB 图，再处理物体和双臂/夹爪框。物体选择对应单实例，去臂取所有候选的 mask 并集。LaMa 使用 BGR、512×512、9×9 膨胀两次及训练侧 Gaussian 融合；修复区域保护可见物体。空去臂 mask 跳过修复并记录 `empty_mask`，不会记录为 `inpainted`。
+每帧 SAM 只编码一次 RGB 图，再处理物体和双臂/夹爪框。稳定阶段的物体框由当前三维关键点投影产生，因此物体保护 mask 仍逐帧分割，不复用过时的像素坐标；抓取时投影随实测 EE 移动。物体选择对应单实例，去臂取所有候选的 mask 并集。LaMa 使用 BGR、512×512、9×9 膨胀两次及训练侧 Gaussian 融合；修复区域保护可见物体。空去臂 mask 跳过修复并记录 `empty_mask`，不会记录为 `inpainted`。
 
 官方启动零输入预热只在首次 reset 之前可用，不创建场景。预热执行真实感知模型和原策略计算；启动 reset 后永久关闭这条探测分支。之后即使任务字符串为 `warmup`，非法零位姿也会正常失败。reset 保留模型资源与固定噪声。
 
-日志包含初始化、关键点数、mask 像素、阶段耗时和 done。`deployment.diagnostic_dir: null` 默认不逐帧写图；显式设置目录后才保存模型画布。
+DINO 与 SAM 默认分别使用 `segmentation.dino_precision: float16`、`sam_precision: float16` 的局部 autocast；原策略和 LaMa 保持 FP32。可设置 `float32` 回退，`bfloat16` 仅用于显式实验。旧部署包缺少这些配置时保持原 FP32/continuous 行为，需要重新导出才能启用优化。
+
+日志包含初始化、当前请求的 `localized_objects`、关键点数、mask 像素、阶段耗时和 done。`deployment.diagnostic_dir: null` 默认不逐帧写图；显式设置目录后才保存模型画布。
 
 ## 保留行为和边界
 
 训练 grasp target 与原推理 sigmoid 的关系仍待真机开合样本核验。本轮验证样本的连续输出约在 0.50–0.73，服务端没有通过修改算法或阈值处理这个现象。done 仅记录日志。几何/软件回归不代表 BRX 标定精度或任务成功率。
 
 仿真继续共享 `inference.policy.ICTPolicy` 和兼容的 `ObjectState`。旧相机辅助代码保存在 `simulation/humanego_sim/legacy_inference/`，新服务端不依赖它们。
+
+分阶段计时和官方回环比较见 [LATENCY.md](LATENCY.md)。计时工具逐阶段同步 CUDA，仅用于性能诊断；正常服务没有这些额外同步。

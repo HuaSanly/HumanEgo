@@ -37,13 +37,28 @@ def main():
         "observation.images.head_right": data["right"],
         "observation.state": data["state"],
     }
+    from unittest.mock import patch
+
+    step = next(s for s in runner.preprocessor.steps if hasattr(s, "processor"))
+    processor = step.processor
+    engine = processor.perception.segmentation
     durations = []
+    dino_calls = []
+    initial_valid_points = None
     for index in range(args.requests):
         snapshot = ObservationSnapshot(
             features, time.monotonic(), "pick_cube", observation_id=str(index)
         )
         start = time.perf_counter()
-        result = runner.predict(snapshot, mode=ExecutionMode.CHUNK)
+        with patch.object(
+            engine.model, "forward", wraps=engine.model.forward
+        ) as detect:
+            result = runner.predict(snapshot, mode=ExecutionMode.CHUNK)
+        dino_calls.append(detect.call_count)
+        if index == 0:
+            initial_valid_points = processor.perception.diagnostics[
+                "valid_points"
+            ].copy()
         torch.cuda.synchronize()
         durations.append(time.perf_counter() - start)
         assert result.canonical_actions.shape == (50, 10)
@@ -56,9 +71,7 @@ def main():
     processor = step.processor
     assert processor.scene is not None
     assert processor.perception.diagnostics["inpainting"] == "inpainted"
-    assert all(
-        n >= 8 for n in processor.perception.diagnostics["valid_points"].values()
-    )
+    assert all(n >= 8 for n in initial_valid_points.values())
     assert processor.perception.masks["arms"].any()
     # Same prepared observation and saved noise; direct calls use the single owned original policy.
     from lerobot_policy_humanego.processor_humanego import observation_from_batch
@@ -117,7 +130,8 @@ def main():
         pass
     else:
         raise AssertionError("Startup probe remained reachable after reset")
-    from unittest.mock import patch
+    if processor.config.perception.get("object_update_mode") == "events":
+        assert dino_calls == [3] + [1] * (args.requests - 1)
 
     dual = data["left"].copy()
     dual[300:, :220] = data["left"][300:, -220:][:, ::-1]
@@ -144,6 +158,8 @@ def main():
         identity=identity,
         initialization_s=initialization,
         request_seconds=durations,
+        dino_calls=dino_calls,
+        initial_valid_points=initial_valid_points,
         mean_s=float(np.mean(durations)),
         p95_s=float(np.percentile(durations, 95)),
         original_policy_max_error=float(np.max(np.abs(wrapped - expected))),

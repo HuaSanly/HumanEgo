@@ -76,6 +76,20 @@ def load_config(path: str | Path) -> InferenceConfig:
         if not isinstance(intrinsics.get(side), dict):
             raise ValueError(f"intrinsics.{side} must be a mapping with K")
 
+    perception = values["perception"]
+    if perception.get("object_update_mode", "continuous") not in (
+        "continuous",
+        "events",
+    ):
+        raise ValueError("perception.object_update_mode must be continuous or events")
+    for key in ("dino_precision", "sam_precision"):
+        if perception.get("segmentation", {}).get(key, "float32") not in (
+            "float32",
+            "float16",
+            "bfloat16",
+        ):
+            raise ValueError(f"segmentation.{key} must be float32, float16 or bfloat16")
+
     deployment = dict(values["deployment"])
     if deployment.get("diagnostic_dir") is not None:
         deployment["diagnostic_dir"] = str(

@@ -141,6 +141,7 @@ def main():
         future = None
         request = None
         latencies = []
+        server_durations = []
         first = None
         next_tick = time.monotonic()
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -151,6 +152,7 @@ def main():
                     assert result.canonical_actions.shape == (50, 10)
                     assert runtime.accept(request, result, task_version=0)
                     latencies.append(time.monotonic() - request.submitted_at)
+                    server_durations.append(result.server_durations)
                     if first is None:
                         first = result.canonical_actions.clone()
                     accepted += 1
@@ -236,6 +238,14 @@ def main():
             recorded_actions=len(robot.actions),
             action_fps=30,
             request_seconds=latencies,
+            server_durations=server_durations,
+            outside_worker_seconds=[
+                latency - durations["worker"] - durations["queue"]
+                for latency, durations in zip(latencies, server_durations, strict=True)
+            ],
+            initial_scene_s=latencies[0],
+            steady_mean_s=float(np.mean(latencies[1:])),
+            steady_p95_s=float(np.percentile(latencies[1:], 95)),
             mean_s=float(np.mean(latencies)),
             p95_s=float(np.percentile(latencies, 95)),
             checks=[

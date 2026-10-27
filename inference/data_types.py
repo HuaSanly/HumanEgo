@@ -59,6 +59,7 @@ class SceneState:
     latched_object: str | None = None
     T_object_in_hand: np.ndarray | None = None
     last_seen: dict[str, float] = field(default_factory=dict)
+    relocalization_started: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

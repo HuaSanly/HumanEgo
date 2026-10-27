@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def config():
     cfg = load_config(ROOT / "cfg/inference/params.yaml")
+    cfg.perception["object_update_mode"] = "continuous"
     K = [[400.0, 0, 320], [0, 400.0, 240], [0, 0, 1]]
     cfg.intrinsics.update(left={"K": K}, right={"K": K})
     T = np.eye(4)
@@ -191,3 +192,74 @@ def test_render_matches_training_segments_and_point_order():
                     expected, *uv, interpolate_bgr(start, end, j / 5), 4
                 )
         np.testing.assert_array_equal(actual, expected)
+
+
+def test_event_updates_skip_static_objects_and_relocate_after_release():
+    p, objects, now = scene_perception()
+    p.config.perception["object_update_mode"] = "events"
+    requested = []
+
+    def observe(obs, object_keys=("obj1", "obj2"), scene=None):
+        requested.append(tuple(object_keys))
+        return {key: obj for key, obj in objects.items() if key in object_keys}
+
+    p.observe = observe
+    p._locate = lambda pts, existing=None: deepcopy(pts)
+    scene = p.initialize_scene(observation())
+    fixed = scene.reference_anchor.T_in_cam.copy()
+    now[0] = 10
+    scene = p.update_scene(observation(), scene)
+    assert requested[-1] == ()
+    assert scene.last_seen == {"obj1": 0, "obj2": 0}
+    now[0] = 11
+    scene = p.update_scene(observation(gripper=1), scene)
+    assert scene.latched_object == "obj2"
+    del objects["obj2"]
+    now[0] = 12
+    scene = p.update_scene(observation(x=0.1, gripper=1), scene)
+    assert requested[-1] == ()
+    assert scene.objects["obj2"].T_in_cam[0, 3] == pytest.approx(0.1)
+    now[0] = 13
+    scene = p.update_scene(observation(x=0.2), scene)
+    assert requested[-1] == ("obj2",)
+    assert scene.relocalization_started == {"obj2": 13}
+    now[0] = 13.5
+    scene = p.update_scene(observation(x=0.2, gripper=1), scene)
+    assert scene.latched_object is None  # Pending relocation cannot be grasped again.
+    now[0] = 14.1
+    with pytest.raises(ValueError, match="obj2.*expired"):
+        p.update_scene(observation(), scene)
+    objects["obj2"] = ObjectState(pose(0.25))
+    scene = p.update_scene(observation(), scene)
+    assert not scene.relocalization_started
+    assert scene.objects["obj2"].T_in_cam[0, 3] == pytest.approx(0.25)
+    now[0] = 30
+    scene = p.update_scene(observation(), scene)
+    assert requested[-1] == ()
+    np.testing.assert_array_equal(fixed, scene.reference_anchor.T_in_cam)
+
+
+def test_event_masks_use_current_projection_without_depth_or_object_detection():
+    from unittest.mock import Mock
+
+    p, objects, _ = scene_perception()
+    scene = p.initialize_scene(observation())
+    points = np.array([[-0.03, -0.03, 0], [0.03, -0.03, 0], [0.03, 0.03, 0]])
+    scene.objects["obj2"].kpts_local = points
+    before = p._object_box(scene.objects["obj2"])
+    scene.objects["obj2"].T_in_cam[0, 3] += 0.1
+    after = p._object_box(scene.objects["obj2"])
+    np.testing.assert_allclose(after - before, [50, 0, 50, 0], atol=1e-4)
+    p.segmentation = Mock()
+    p.segmentation.segment.return_value = {
+        k: np.zeros((480, 640), bool) for k in ("obj1", "obj2", "arms")
+    }
+    p.stereo.estimate = Mock(side_effect=AssertionError("No depth needed"))
+    points = Perception.observe(p, observation(), (), scene)
+    assert points == {}
+    assert p.segmentation.segment.call_args.args[1] == {}
+    assert set(p.segmentation.segment.call_args.kwargs["object_boxes"]) == {
+        "obj1",
+        "obj2",
+    }
+    p.stereo.estimate.assert_not_called()

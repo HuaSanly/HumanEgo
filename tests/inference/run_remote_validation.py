@@ -61,7 +61,9 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     server = yaml.safe_load((args.bundle / "server.yaml").read_text())
     config = RemoteInferenceConfig(
-        endpoint=server["zenoh"]["listen_endpoints"][0],
+        endpoint=server["zenoh"]["listen_endpoints"][0].replace(
+            "tcp/0.0.0.0:", "tcp/127.0.0.1:", 1
+        ),
         deployment=server["deployment"],
         semantics=server["semantics"],
         chunk_merge="append",

@@ -2,7 +2,7 @@
 
 ## 连接与会话
 
-- 使用官方 LeRobot remote inference，revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，传输为 Zenoh；服务端监听地址、deployment 和语义标识以部署包 `server.yaml` 为准。默认地址 `tcp/127.0.0.1:7447`，跨主机需配置可访问地址。
+- 使用官方 LeRobot remote inference，revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，传输为 Zenoh；服务端监听地址、deployment 和语义标识以部署包 `server.yaml` 为准。默认监听 `tcp/0.0.0.0:7447`；客户端连接 `tcp/<服务端局域网IP>:7447`，不能将 `0.0.0.0` 作为目标地址。
 - 默认 deployment：`humanego-pick-cube-anchor`；robot type：`humanego_brx`；语义标识：`humanego.right-ee.left-rectified-optical.m.row-major-rotation6d.continuous-grasp.v1`。
 - 支持普通 `chunk` 模式，30 Hz；不启用 RTC 或语言。连接后通过官方 discovery/admission 校验 feature、语义、模式和动作间隔，再开始发送观测。
 - 每个 episode 开始时 reset。reset 清空服务端场景和固定参考；旧 generation 的请求和结果不能用于新 episode。使用官方 runtime 处理请求、动作块补货和过期结果。

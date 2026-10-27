@@ -34,7 +34,7 @@
 
 BRX 右臂 EE 原点约定为两夹爪接触点的抓取中心。EE 轴向与模型 hand 轴对齐：+X 沿夹爪开合方向，+Y 从夹爪底座指向抓取中心，+Z 按右手系确定。相对 URDF `LinearclampinggripperJZ01_Link` 的候选方向为：EE +X 对应底座 +Y、EE +Y 对应底座 +X、EE +Z 对应底座 −Z。夹爪两侧的方向及具体接触位置尚待实机确认；客户端不得直接将 `ArmR08_Link` 或夹爪底座位姿当作上述 EE 位姿。
 
-客户端发送 EE 位姿，服务端使用 `T_EE_from_hand` 转换为模型 hand 位姿，预测后用其逆变换返回 EE 目标；客户端不要预先做该 hand 转换。目前生产配置的 `T_EE_from_hand` 和左右目内参尚未填写，双目基线由所提供的相机外参计算为 0.060039595 m，仍须与客户端实际校正映射核对。
+客户端发送 EE 位姿，服务端使用 `T_EE_from_hand` 转换为模型 hand 位姿，预测后用其逆变换返回 EE 目标；客户端不要预先做该 hand 转换。目前 `T_EE_from_hand` 尚未填写；左右目校正内参按客户端 `stereoRectify` 的 `CALIB_ZERO_DISPARITY`、`alpha=0` 计算，双目基线为 0.060039595 m，须与客户端实际校正映射和图像核对。原始左目 optical 位姿转换到校正左目时必须应用 `R1`：`T_left_rect_from_EE = diag(R1, 1) @ T_left_raw_from_EE`，其中 `R1` 记录在 `cfg/inference/stereo_raw_calibration.yaml`。
 
 ## episode 约束
 

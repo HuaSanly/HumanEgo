@@ -4,7 +4,7 @@
 
 使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，入口为原生 `lerobot-policy-server`，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
 
-软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 双目基线由提供的相机外参计算；内参和 hand 变换仍为 `null`，默认生产配置不能启动。真机闭环和任务成功率另行验收。
+软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 双目基线和校正内参由提供的相机标定计算；hand 变换仍为 `null`，默认生产配置不能启动。真机闭环和任务成功率另行验收。
 
 ## 环境与安装
 
@@ -33,7 +33,7 @@ source /absolute/path/to/new-inference-env/bin/activate
 
 `T_left_from_right` 将右目 optical 点变换到左目。首版要求旋转为单位矩阵、右目原点位于左目正 X 轴、两目内参相同且无 skew；投影矩阵与米制深度直接从 K 和此变换构建，不另存一份基线。`T_EE_from_hand` 将模型 hand 坐标变到实际 EE 坐标，组合为 `T_cam_from_hand = T_cam_from_EE @ T_EE_from_hand`。启动时检查 SE(3)、单位、基线方向及缺失字段。实际图像是否完成正确校正，需要相机标定环节保证。
 
-提供的原始相机内参、畸变和左右相机外参记录在 `cfg/inference/stereo_raw_calibration.yaml`，供标定使用，运行时不读取。`extrinsics.yaml` 的水平校正基线 0.060039595 m 是原始平移向量的长度，须核对客户端实际校正映射；左右校正内参仍需填写与客户端映射一致的 P1/P2 左上角 3×3 矩阵，不能直接使用原始 K。
+提供的原始相机内参、畸变和左右相机外参记录在 `cfg/inference/stereo_raw_calibration.yaml`，供标定使用，运行时不读取。`extrinsics.yaml` 的水平校正基线 0.060039595 m 是原始平移向量的长度，须核对客户端实际校正映射；左右校正内参由 `stereoRectify`（`CALIB_ZERO_DISPARITY`，`alpha=0`，640×480）的 P1/P2 左上角计算；原始文件同时记录 R1/R2 和 P1/P2。服务端接收已校正图像，不再次校正；上线前须核对客户端映射和实际图像。
 
 ```bash
 python -m inference.config --config_path cfg/inference/params.yaml

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 import numpy as np
+import cv2
 import yaml
 
 from lerobot_policy_humanego.config import load_config, validate_runtime_config
@@ -55,7 +56,9 @@ class ScaffoldTests(unittest.TestCase):
 
     def test_templates_report_missing_calibration(self):
         config = load_config(PARAMS)
-        raw = yaml.safe_load((PARAMS.parent / "stereo_raw_calibration.yaml").read_text())
+        raw = yaml.safe_load(
+            (PARAMS.parent / "stereo_raw_calibration.yaml").read_text()
+        )
         self.assertAlmostEqual(
             config.extrinsics["T_left_from_right"][0][3],
             np.linalg.norm(raw["translation_left_to_right_m"]),
@@ -70,14 +73,27 @@ class ScaffoldTests(unittest.TestCase):
                 [0.0, 0.0, 0.0, 1.0],
             ],
         )
+        _, _, p1, p2, *_ = cv2.stereoRectify(
+            np.asarray(raw["left"]["K"], dtype=np.float64),
+            np.asarray(raw["left"]["distortion"], dtype=np.float64),
+            np.asarray(raw["right"]["K"], dtype=np.float64),
+            np.asarray(raw["right"]["distortion"], dtype=np.float64),
+            (640, 480),
+            np.asarray(raw["rotation_left_to_right"], dtype=np.float64),
+            np.asarray(raw["translation_left_to_right_m"], dtype=np.float64),
+            flags=cv2.CALIB_ZERO_DISPARITY,
+            alpha=0,
+        )
+        np.testing.assert_allclose(config.intrinsics["left"]["K"], p1[:, :3])
+        np.testing.assert_allclose(config.intrinsics["right"]["K"], p2[:, :3])
+        self.assertAlmostEqual(
+            -p2[0, 3] / p2[0, 0], config.extrinsics["T_left_from_right"][0][3]
+        )
         with self.assertRaises(ValueError) as error:
             validate_runtime_config(config)
-        for field in (
-            "intrinsics.left.K",
-            "intrinsics.right.K",
-            "extrinsics.T_EE_from_hand",
-        ):
-            self.assertIn(field, str(error.exception))
+        self.assertIn("extrinsics.T_EE_from_hand", str(error.exception))
+        self.assertNotIn("intrinsics.left.K", str(error.exception))
+        self.assertNotIn("intrinsics.right.K", str(error.exception))
         self.assertNotIn("extrinsics.T_left_from_right", str(error.exception))
 
     def make_complete_config(self, directory):

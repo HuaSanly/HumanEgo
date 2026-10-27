@@ -4,7 +4,7 @@
 
 使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，入口为原生 `lerobot-policy-server`，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
 
-软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 双目基线和校正内参由提供的相机标定计算；hand 变换仍为 `null`，默认生产配置不能启动。真机闭环和任务成功率另行验收。
+软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 双目基线和校正内参由提供的相机标定计算，EE 与模型 hand 坐标系按约定重合。真机标定、闭环和任务成功率另行验收。
 
 ## 环境与安装
 

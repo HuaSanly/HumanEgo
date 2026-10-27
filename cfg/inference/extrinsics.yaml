@@ -7,5 +7,9 @@ T_left_from_right:
   - [0.0, 1.0, 0.0, 0.000]
   - [0.0, 0.0, 1.0, 0.000]
   - [0.0, 0.0, 0.0, 1.000]
-# Model hand -> measured robot EE; includes the grasp-centre tool offset.
-T_EE_from_hand: null
+# EE and model hand share the grasp-centre origin and coordinate axes.
+T_EE_from_hand:
+  - [1.0, 0.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0, 0.0]
+  - [0.0, 0.0, 1.0, 0.0]
+  - [0.0, 0.0, 0.0, 1.0]

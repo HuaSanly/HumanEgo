@@ -89,6 +89,8 @@ class ScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(
             -p2[0, 3] / p2[0, 0], config.extrinsics["T_left_from_right"][0][3]
         )
+        np.testing.assert_array_equal(config.extrinsics["T_EE_from_hand"], np.eye(4))
+        config.extrinsics["T_EE_from_hand"] = None
         with self.assertRaises(ValueError) as error:
             validate_runtime_config(config)
         self.assertIn("extrinsics.T_EE_from_hand", str(error.exception))

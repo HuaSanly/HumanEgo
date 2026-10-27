@@ -14,9 +14,18 @@ import numpy as np
 import yaml
 
 from lerobot_policy_humanego.config import load_config, validate_runtime_config
-from lerobot_policy_humanego.data_types import ObjectState, Observation, RobotState, SceneState, StereoFrame
+from lerobot_policy_humanego.data_types import (
+    ObjectState,
+    Observation,
+    RobotState,
+    SceneState,
+    StereoFrame,
+)
 from lerobot_policy_humanego.perception import Perception
-from lerobot_policy_humanego.processor_humanego import HumanEgoProcessor, validate_observation
+from lerobot_policy_humanego.processor_humanego import (
+    HumanEgoProcessor,
+    validate_observation,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,10 +55,16 @@ class ScaffoldTests(unittest.TestCase):
 
     def test_templates_report_missing_calibration(self):
         config = load_config(PARAMS)
+        raw = yaml.safe_load((PARAMS.parent / "stereo_raw_calibration.yaml").read_text())
+        self.assertAlmostEqual(
+            config.extrinsics["T_left_from_right"][0][3],
+            np.linalg.norm(raw["translation_left_to_right_m"]),
+            places=12,
+        )
         self.assertEqual(
             config.extrinsics["T_left_from_right"],
             [
-                [1.0, 0.0, 0.0, 0.06],
+                [1.0, 0.0, 0.0, 0.060039595259997],
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],

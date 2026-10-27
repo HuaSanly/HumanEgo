@@ -1,0 +1,24 @@
+# User-supplied calibrationdata.tar.gz values, before stereo rectification.
+# Source per-eye resolution 2400x1800; K scaled by 640/2400 and 480/1800.
+# This file records source data; the runtime does not load or rectify images.
+image_size_hw: [480, 640]
+left:
+  K:
+    - [222.209416, 0.0, 333.949616]
+    - [0.0, 221.989394667, 229.8432]
+    - [0.0, 0.0, 1.0]
+  distortion: [0.002403, -0.015801, 0.000534, -0.001080, 0.0]
+right:
+  K:
+    - [222.002224, 0.0, 329.031496]
+    - [0.0, 221.969690667, 249.999656]
+    - [0.0, 0.0, 1.0]
+  distortion: [-0.002906, -0.013047, -0.001126, -0.002410, 0.0]
+# OpenCV convention: X_right = rotation_left_to_right @ X_left + translation.
+rotation_left_to_right:
+  - [0.999991164173, -0.000166237064, 0.004200302710]
+  - [0.000179348852, 0.999995121627, -0.003120667155]
+  - [-0.004199759084, 0.003121402490, 0.999986302792]
+translation_left_to_right_m: [-0.0600315025392, 0.00030573302667, -0.000937138829996]
+# The submitted calibration reported true. Matching rectified maps/K remain unverified here.
+source_calibration_validated: true

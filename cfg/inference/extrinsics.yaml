@@ -1,10 +1,9 @@
 # T_A_from_B maps coordinates expressed in B into A. All translations are metres.
 translation_unit: m
-# Nominal 60 mm baseline from BRX EYEL/EYER joint origins, expressed in
-# horizontal RECTIFIED optical frames. Assumes these origins are the actual
-# camera centres; verify against the physical stereo calibration before use.
+# Baseline norm from stereo_raw_calibration.yaml, expressed in horizontal
+# RECTIFIED optical frames. Verify it matches the client rectification maps.
 T_left_from_right:
-  - [1.0, 0.0, 0.0, 0.060]
+  - [1.0, 0.0, 0.0, 0.060039595259997]
   - [0.0, 1.0, 0.0, 0.000]
   - [0.0, 0.0, 1.0, 0.000]
   - [0.0, 0.0, 0.0, 1.000]

@@ -44,16 +44,26 @@ class ScaffoldTests(unittest.TestCase):
         )
         self.assertEqual(config.policy["num_inference_steps"], 20)
 
-    def test_templates_report_all_missing_calibration(self):
+    def test_templates_report_missing_calibration(self):
+        config = load_config(PARAMS)
+        self.assertEqual(
+            config.extrinsics["T_left_from_right"],
+            [
+                [1.0, 0.0, 0.0, 0.06],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        )
         with self.assertRaises(ValueError) as error:
-            validate_runtime_config(load_config(PARAMS))
+            validate_runtime_config(config)
         for field in (
             "intrinsics.left.K",
             "intrinsics.right.K",
-            "extrinsics.T_left_from_right",
             "extrinsics.T_EE_from_hand",
         ):
             self.assertIn(field, str(error.exception))
+        self.assertNotIn("extrinsics.T_left_from_right", str(error.exception))
 
     def make_complete_config(self, directory):
         directory = Path(directory)

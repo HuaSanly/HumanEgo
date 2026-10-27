@@ -14,7 +14,7 @@
 - 最终安装包：`runs/inference-validation/wheels-delivery/lerobot_policy_humanego-0.1.0-py3-none-any.whl`。只映射原目录和必要共享源文件，不包含另一份模型实现。
 - 测试部署包：`runs/inference-validation/bundle-final/`；这是 **PICO 录制回放测试标定**，不能用作 BRX 正式标定。
 
-生产 `cfg/inference/intrinsics.yaml`、`extrinsics.yaml` 的未测矩阵仍为 `null`，运行检查会拒绝启动。既有训练/仿真环境未升级；用户原有两份仿真配置和 `get-docker.sh` 的内容哈希与实施前一致。
+生产配置中的左右目内参和 hand 变换仍为 `null`，运行检查会拒绝启动；左右目外参为待实测的 URDF 名义候选值。既有训练/仿真环境未升级；用户原有两份仿真配置和 `get-docker.sh` 的内容哈希与实施前一致。
 
 ## 验证结果
 

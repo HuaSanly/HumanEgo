@@ -100,4 +100,4 @@ HF_HUB_OFFLINE=1 python inference/tests/run_remote_validation.py \
 - `runs/inference-validation/remote-latency-after/report.json`
 - `runs/inference-validation/bundle-latency/`：优化后的录制样本测试部署包，使用独立测试标定。
 
-生产 BRX 标定仍为 null。旧 bundle 的资产不会随源码配置更新；正式标定完成后按 README 重新导出，才能启用 events / FP16。
+BRX 左右目外参是未实测的 URDF 名义候选值，内参及 hand 变换仍为 null。旧 bundle 的资产不会随源码配置更新；正式标定完成后按 README 重新导出，才能启用 events / FP16。

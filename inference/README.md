@@ -4,7 +4,7 @@
 
 使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，入口为原生 `lerobot-policy-server`，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
 
-软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。具体结果见 [VALIDATION.md](VALIDATION.md)。生产 BRX 标定仍为 `null`，默认生产配置不能启动；真机闭环和任务成功率另行验收。
+软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。具体结果见 [VALIDATION.md](VALIDATION.md)。BRX 左右目外参目前是 URDF 名义候选值；内参和 hand 变换仍为 `null`，默认生产配置不能启动。真机闭环和任务成功率另行验收。
 
 ## 环境与安装
 
@@ -32,6 +32,8 @@ source /absolute/path/to/new-inference-env/bin/activate
 | `extrinsics.yaml` | 米制 `T_left_from_right`、`T_EE_from_hand` |
 
 `T_left_from_right` 将右目 optical 点变换到左目。首版要求旋转为单位矩阵、右目原点位于左目正 X 轴、两目内参相同且无 skew；投影矩阵与米制深度直接从 K 和此变换构建，不另存一份基线。`T_EE_from_hand` 将模型 hand 坐标变到实际 EE 坐标，组合为 `T_cam_from_hand = T_cam_from_EE @ T_EE_from_hand`。启动时检查 SE(3)、单位、基线方向及缺失字段。实际图像是否完成正确校正，需要相机标定环节保证。
+
+配置中的 0.060 m 基线来自 BRX URDF 的 `EYEL_Joint` 和 `EYER_Joint` 原点距离，假设两者对应真实左右相机光心，且图像已水平校正。它是校正 optical 坐标系下的名义值，不是原始 eye link 之间的坐标变换；在实机使用前须与相机标定核对。
 
 ```bash
 python -m inference.config --config_path cfg/inference/params.yaml
@@ -71,6 +73,10 @@ lerobot-policy-server --config_path /new/location/server.yaml \
 ```
 
 位置单位米，所有 EE 位姿使用**左目校正 optical 坐标系**：X 右、Y 下、Z 前。rotation6d 必须是 `R[:, :2].reshape(-1)` 的 row-major 展平，前两列为单位正交列，第三列由叉积恢复。状态末维为实测 `0=开、1=闭`；动作末维则是原策略连续 sigmoid grasp，逐值透传，由新客户端定义实际开合映射。不要将其直接当作电机开度标定值。
+
+BRX 右臂的 EE 约定为两个夹爪接触点的抓取中心。EE 轴与模型 hand 轴对齐：+X 沿夹爪开合方向，+Y 从夹爪底座指向抓取中心，+Z 按右手系确定。相对于 URDF 的 `LinearclampinggripperJZ01_Link`，当前候选方向为 EE +X 对应夹爪底座 +Y、EE +Y 对应底座 +X、EE +Z 对应底座 −Z；夹爪两侧的方向和沿指方向的具体接触位置仍需结合实机确认。客户端须发送这个 EE 的实测位姿，不能直接发送 `ArmR08_Link` 或夹爪底座位姿。
+
+如果最终确定 EE 与模型 hand 的原点和轴向完全重合，`T_EE_from_hand` 可设为 4×4 单位矩阵；当前仍保留 `null`，待上述约定核实。客户端发送 EE 位姿，服务端乘 `T_EE_from_hand` 得到 hand 位姿；预测后乘该矩阵的逆，返回 EE 目标位姿，客户端不应提前做 hand 转换。
 
 头部、躯干和底盘在一个 episode 内必须静止。左右图和 EE 状态应在同一采样时刻获得，调用方保留原始单调 capture time，并交给官方 runtime 进行新鲜度检查。几何计算只使用原始双目，服务端中间的场景、修复图、ICT 和 done 不进入协议。
 

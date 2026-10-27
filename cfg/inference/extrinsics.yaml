@@ -1,6 +1,12 @@
 # T_A_from_B maps coordinates expressed in B into A. All translations are metres.
 translation_unit: m
-# Between the RECTIFIED optical frames corresponding to intrinsics.yaml.
-T_left_from_right: null
+# Nominal 60 mm baseline from BRX EYEL/EYER joint origins, expressed in
+# horizontal RECTIFIED optical frames. Assumes these origins are the actual
+# camera centres; verify against the physical stereo calibration before use.
+T_left_from_right:
+  - [1.0, 0.0, 0.0, 0.060]
+  - [0.0, 1.0, 0.0, 0.000]
+  - [0.0, 0.0, 1.0, 0.000]
+  - [0.0, 0.0, 0.0, 1.000]
 # Model hand -> measured robot EE; includes the grasp-centre tool offset.
 T_EE_from_hand: null

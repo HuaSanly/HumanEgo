@@ -68,25 +68,25 @@
 
 ```bash
 conda activate HumanEgo-inference
-python -m pytest inference/test_scaffold.py inference/tests -q
+python -m pytest tests/inference -q
 ruff check inference --exclude policy.py --exclude build
 python -m compileall -q inference
 python -m pip check
 bash -n inference/install.sh
 
 # 独立测试输入与标定，来源是训练录制元数据；不会回填生产配置。
-python inference/tests/make_recording_fixture.py \
+python tests/inference/make_recording_fixture.py \
   --source data/pick_cube/spatial/spatial_pick_cube_000/spatial_source.json \
   --params cfg/inference/params.yaml \
   --output runs/inference-reproduce/recording
 humanego-export --config_path runs/inference-reproduce/recording/params.yaml \
   --output runs/inference-reproduce/bundle
 
-HF_HUB_OFFLINE=1 python inference/tests/run_gpu_validation.py \
+HF_HUB_OFFLINE=1 python tests/inference/run_gpu_validation.py \
   --bundle runs/inference-reproduce/bundle \
   --observation runs/inference-reproduce/recording/observation.npz \
   --output runs/inference-reproduce/gpu --requests 10
-HF_HUB_OFFLINE=1 python inference/tests/run_remote_validation.py \
+HF_HUB_OFFLINE=1 python tests/inference/run_remote_validation.py \
   --bundle runs/inference-reproduce/bundle \
   --observation runs/inference-reproduce/recording/observation.npz \
   --output runs/inference-reproduce/remote
@@ -94,7 +94,7 @@ HF_HUB_OFFLINE=1 python inference/tests/run_remote_validation.py \
 python -m pip wheel --no-deps --wheel-dir runs/inference-reproduce/wheels ./inference
 python -m pip install --no-deps --target runs/inference-reproduce/installed \
   runs/inference-reproduce/wheels/lerobot_policy_humanego-0.1.0-py3-none-any.whl
-HF_HUB_OFFLINE=1 python inference/tests/run_relocation_validation.py \
+HF_HUB_OFFLINE=1 python tests/inference/run_relocation_validation.py \
   --installed runs/inference-reproduce/installed \
   --bundle runs/inference-reproduce/bundle --training-root runs/pick_cube \
   --output runs/inference-reproduce/relocation

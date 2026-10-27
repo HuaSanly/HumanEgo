@@ -13,13 +13,13 @@ import unittest
 import numpy as np
 import yaml
 
-from .config import load_config, validate_runtime_config
-from .data_types import ObjectState, Observation, RobotState, SceneState, StereoFrame
-from .perception import Perception
-from .processor_humanego import HumanEgoProcessor, validate_observation
+from lerobot_policy_humanego.config import load_config, validate_runtime_config
+from lerobot_policy_humanego.data_types import ObjectState, Observation, RobotState, SceneState, StereoFrame
+from lerobot_policy_humanego.perception import Perception
+from lerobot_policy_humanego.processor_humanego import HumanEgoProcessor, validate_observation
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PARAMS = ROOT / "cfg" / "inference" / "params.yaml"
 
 
@@ -102,7 +102,7 @@ class ScaffoldTests(unittest.TestCase):
                 validate_runtime_config(config)
 
     def test_export_refuses_nonempty_directory_before_loading_weights(self):
-        from .export import export_policy
+        from lerobot_policy_humanego.export import export_policy
 
         with tempfile.TemporaryDirectory() as directory:
             config = self.make_complete_config(directory)

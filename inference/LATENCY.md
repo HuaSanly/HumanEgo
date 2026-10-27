@@ -72,19 +72,19 @@ LaMa 继续使用 FP32、512×512、原膨胀和融合方式。原 `policy.py` �
 在仓库根目录、`HumanEgo-inference` 环境中运行：
 
 ```bash
-HF_HUB_OFFLINE=1 python inference/tests/benchmark_latency.py \
+HF_HUB_OFFLINE=1 python tests/inference/benchmark_latency.py \
   --bundle runs/inference-validation/bundle-final \
   --observation runs/inference-validation/recording/observation.npz \
   --object-update-mode continuous --requests 10 \
   --output runs/inference-validation/latency-precision-new
 
-HF_HUB_OFFLINE=1 python inference/tests/benchmark_latency.py \
+HF_HUB_OFFLINE=1 python tests/inference/benchmark_latency.py \
   --bundle runs/inference-validation/bundle-final \
   --observation runs/inference-validation/recording/observation.npz \
   --object-update-mode events --requests 10 \
   --output runs/inference-validation/latency-events-new
 
-HF_HUB_OFFLINE=1 python inference/tests/run_remote_validation.py \
+HF_HUB_OFFLINE=1 python tests/inference/run_remote_validation.py \
   --bundle runs/inference-validation/bundle-latency \
   --observation runs/inference-validation/recording/observation.npz \
   --chunks 10 --output runs/inference-validation/remote-latency-new

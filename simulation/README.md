@@ -145,6 +145,78 @@ Those retain the **Live physics** prop editor and may use either arm mode.
 
 ## Results
 
+### Reproducible pick_cube batch evaluation
+
+```bash
+# 10 randomized layouts × 3 policy-noise seeds = 30 trials; one GPU worker by default.
+python simulation/scripts/evaluate.py --config simulation/configs/pick_cube.yaml \
+  --n 10 --scene-seed 7777 --policy-seeds 0 1 2 --out pick_cube_eval_dev
+
+# Freeze inputs without loading model weights into the GPU or running inference.
+python simulation/scripts/evaluate.py --config simulation/configs/pick_cube.yaml \
+  --n 50 --scene-seed 8888 --policy-seeds 0 1 2 --out pick_cube_eval_150 --prepare-only
+
+# Resume using frozen inputs, even if the live task YAML has since changed.
+python simulation/scripts/evaluate.py --out pick_cube_eval_150 --resume --workers 1
+
+# Retry infrastructure errors explicitly; ordinary task failures remain completed trials.
+python simulation/scripts/evaluate.py --out pick_cube_eval_150 --resume --retry-errors
+
+# Rebuild the report and render failed recordings, without running the policy again.
+python simulation/scripts/evaluate.py --out pick_cube_eval_dev --report-only --videos failures
+# Or choose zero-based trial indices: --report-only --video-trials 0 3
+
+# Compare another controller on the exact same layouts, environment seeds and policy noise.
+python simulation/scripts/evaluate.py --config simulation/configs/pick_cube.yaml \
+  --trials simulation/runs/pick_cube_eval_dev/trials.json \
+  --set control.grasp_assist.enabled=false --set control.forced_lift_height=0 \
+  --set control.forced_lift_frames=0 --out pick_cube_eval_autonomous_grasp
+```
+
+`--n` counts **scenes**, not total trials. The default pick_cube batch is 50
+scenes × noise seeds `[0, 1, 2]` = 150 trials. `--scene-seed` defaults to `--seed`
+(0). Scene-set seeds 9001–9099 require `--final` and should be reserved for final
+evaluation rather than parameter selection. Policy seeds are explicit seeds of
+the same checkpoint's fixed per-episode flow noise; they are not training seeds.
+Every scene uses the same environment/depth-noise seed across its policy repeats.
+Worker count and execution order do not enter seed generation. GPU execution can
+still have small numerical differences; reproducibility is not a bitwise guarantee.
+
+Sampling settings live in `configs/eval_pick_cube.yaml` (`--sampling` selects
+another file). The default independently jitters cube and container x/y by ±3 cm;
+yaw jitter is configurable and defaults to zero. Full object footprints, including
+container handles, must fit the table, declared task workspace and camera view,
+with no initial object overlap. The workspace is a geometric envelope, **not an
+IK guarantee for arbitrary policy orientations**. Rejected candidate counts are
+saved; policy failures never cause a scene to be replaced. Batch episodes start
+from settled states without the decorative intro drop.
+
+The output `simulation/runs/<out>/` (or absolute `--out` directory) contains:
+
+- `config.yaml`, `sampling.yaml`, `trials.json`: frozen effective inputs and every trial's poses/seeds.
+- `protocol.json`, `source.patch`: checkpoint/training-metadata hashes, source-code hash,
+  dependency versions, Git revision/local changes, device and all assist settings.
+- `episodes/trial_XXXXXX/result.json` and `episode.json`: atomic per-trial results and physics recordings.
+- `results.csv`, `summary.json`, `report.md`: trial table, aggregate statistics and readable report.
+
+The batch score requires the existing released/inside/settled placement checks,
+plus a real secure grasp: both pads exert >0.1 N on a block lifted >2.5 cm for at
+least 0.1 s, and the measured gripper is at least 90% open at the end. The original
+runner score is retained as `runner_success`. Contact/lift observations do not
+change policy inputs or control. Reports distinguish lift, secure grasp, transport,
+release-assist use, IK failures and task failure modes. Errors count as failures
+in the final denominator and are listed separately; incomplete batches show a
+completed-trial rate but withhold the final rate and confidence interval.
+The primary 95% interval bootstraps **whole scenes**, keeping their policy repeats
+together. Per-policy-seed Wilson intervals and rates are also saved.
+
+Completed successes, task failures and errors are skipped on resume; only
+`--retry-errors` retries errors. A trial interrupted before publishing its atomic
+`result.json` is rerun. Changed frozen inputs, source code, dependencies, device,
+checkpoint contents or training metadata require a new output directory. Reporting
+alone does not require the original checkpoint or runtime. Videos are off by
+default and are reconstructed from the existing 10 Hz physics logs without inference.
+
 Per-arm success = bread released and resting on the plate, on randomized scenes (paper protocol,
 soft bread, sourced physics, table height measured from the real video). The headline column is the
 reserved test set (seeds 9001+, 100 scenes per robot, never used to pick parameters), with the

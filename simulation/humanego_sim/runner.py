@@ -490,11 +490,13 @@ class EpisodeRunner:
 
     def run(self, scene: Optional[dict] = None, seed: int = 0, log_dir: Optional[str] = None,
             record_hz: float = 30.0, save_policy_images: bool = True, verbose: bool = True,
-            intro: bool = True) -> EpisodeResult:
+            intro: bool = True, policy_seed: Optional[int] = None) -> EpisodeResult:
         wall0 = time.time()
         env, cc = self.env, self.cc
         env.rng = np.random.default_rng(seed)
-        self._seed_policy_noise(int(self.cfg["policy"].get("seed", 0)) + seed)
+        noise_seed = int(self.cfg["policy"].get("seed", 0)) + seed if policy_seed is None else int(policy_seed)
+        self._episode_seeds = {"env_seed": int(seed), "policy_seed": noise_seed}
+        self._seed_policy_noise(noise_seed)
         env.reset(scene, settle=0.0 if intro else 0.4)
         intro_frames = self._intro_drop(np.random.default_rng(seed + 99), record_hz) if intro else []
         sides = env.sides
@@ -796,6 +798,7 @@ class EpisodeRunner:
         meta["task"] = self.task
         meta["scene_only"] = False
         meta["policy"] = dict(self.cfg["policy"])
+        meta["seeds"] = dict(self._episode_seeds)
         meta["scene_init"] = env.default_scene()
         meta["scene_init"].update(scene or {})
         meta["result"] = {"success": res.success, "per_side": res.per_side, "duration": res.duration}

@@ -1,0 +1,13 @@
+# Evaluation-only sampling; does not alter task physics or controller settings.
+cube_xy_jitter: [0.03, 0.03]
+container_xy_jitter: [0.03, 0.03]
+cube_yaw_jitter_deg: 0.0
+container_yaw_jitter_deg: 0.0
+table_margin: 0.01
+min_object_gap: 0.02
+camera_margin_px: 4
+# Declared task workspace, not a guarantee that every predicted orientation has IK.
+workspace:
+  x: [0.18, 0.55]
+  y: [-0.42, 0.27]
+max_attempts_per_scene: 1000

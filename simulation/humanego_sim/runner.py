@@ -32,6 +32,7 @@ from .controller import SimController
 from .driver import T_to_p
 from .env import REPO_ROOT, ServeBreadSim
 from .perception import SideObjects, SimPerception, mirror_pose, split_mask_by_x
+from .release_assist import ReleaseAssist
 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
@@ -293,6 +294,52 @@ class EpisodeRunner:
             pb[2] += bias
         return arm.p_in_base_to_p_in_cam(pb)
 
+    def _start_assisted_release(self, ctx: SideCtx, controller: SimController, t: float):
+        """Take ownership before opening so stale policy chunks cannot close the hand."""
+        side, arm = ctx.side, self.env.arms[ctx.side]
+        controller.muted[side] = True
+        controller.clear(side)
+        controller.reperceive[side] = None
+        ctx.forced_lift_counter = 0
+        ctx.hand.update(is_grasping=False, latched_obj=None, T_lock_h2obj=None)
+        ctx.is_done, ctx.done_reason = True, "release_assist"
+        ctx.wrap_phase, ctx.wrap_t0 = "assist_open", t
+        arm.move_p(arm.get_p(), duration=0.05)
+        arm.open_gripper(goal_time=controller.open_goal_time)
+        controller.events[side].append((round(t, 2), "release_assist:open"))
+
+    def _advance_assisted_release(self, ctx: SideCtx, assist: ReleaseAssist,
+                                  controller: SimController, t: float):
+        arm = self.env.arms[ctx.side]
+        elapsed = t - ctx.wrap_t0
+        if ctx.wrap_phase == "assist_open":
+            if elapsed >= controller.open_goal_time and arm.get_gripper_q() >= 0.9:
+                ctx.wrap_phase, ctx.wrap_t0 = "assist_settle", t
+                ctx.hand["has_released"] = True
+                assist.outcome = "settling"
+            elif elapsed >= controller.open_goal_time + assist.settle_timeout:
+                assist.outcome = "open_timeout"
+            else:
+                return
+        elif ctx.wrap_phase == "assist_settle":
+            if self.evaluate({ctx.side: ctx})[ctx.side]["success"]:
+                if assist.settled_since is None:
+                    assist.settled_since = t
+            else:
+                assist.settled_since = None
+            if assist.settled_since is not None and t - assist.settled_since >= 0.5 - 1e-9:
+                assist.outcome = "placed"
+            elif elapsed >= assist.settle_timeout:
+                assist.outcome = "settle_timeout"
+            else:
+                return
+        else:
+            return
+        if assist.outcome in ("placed", "open_timeout", "settle_timeout"):
+            controller.events[ctx.side].append((round(t, 2), "release_assist:" + assist.outcome))
+            ctx.wrap_phase, ctx.wrap_t0 = "home", t
+            arm.go_home(duration=3.0)
+
     # ------------------------------------------------------------------
     def _run_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
         """Port of Inference._run_side for camera/anchor-frame absolute checkpoints."""
@@ -474,6 +521,8 @@ class EpisodeRunner:
                 ctx.reference_anchor = self._static_reference_anchor(s, ctx.objs)
         ctxs["right"].is_active = True
         controller = SimController(env.arms, cc)
+        release_assists = ({s: ReleaseAssist(env, s, cc.get("release_assist", {}) or {}) for s in sides}
+                           if self.task == "pick_cube" else {})
         geoms = {s: self._perceived_geometry(s, side_objs[s]) for s in sides}
         for s in sides:
             if geoms[s].get("bread"):
@@ -490,6 +539,7 @@ class EpisodeRunner:
         P = float(cc.get("policy_period", 0.3))
         Tc = 1.0 / float(cc.get("control_freq", 10.0))
         T_max = float(cc.get("max_episode_time", 40.0))
+        deadline = T_max
         rec_dt = 1.0 / record_hz
         next_pol, next_ctl, next_rec = 0.0, 0.0, 0.0
         pending = None          # (deliver_time, payload) — inference latency
@@ -503,7 +553,7 @@ class EpisodeRunner:
                 os.makedirs(img_dir, exist_ok=True)
         n_pol = 0
 
-        while env.t < T_max:
+        while env.t < deadline:
             t = env.t
             if tr is not None and t >= next_ctl - 1e-9:
                 # state before the last physics step + the controls it ran with: replaying that one step
@@ -514,7 +564,9 @@ class EpisodeRunner:
             # ---- deliver the previous inference, then observe again ----
             if t >= next_pol - 1e-9:
                 if pending is not None:
-                    controller.update_target(*pending)
+                    rt, grasp = pending
+                    active = {s: chunk for s, chunk in rt.items() if not controller.muted[s]}
+                    controller.update_target(active, {s: grasp[s] for s in active})
                     pending = None
                 if not ctxs["right"].is_active:
                     ctxs["right"].is_active = True
@@ -571,6 +623,9 @@ class EpisodeRunner:
                             print(f"[sim] {s} done ({ctx.done_reason}) at t={t:.1f}s -> open + home")
             # ---- wrap-up sequencing (open -> home) ----
             for s, ctx in ctxs.items():
+                if ctx.wrap_phase in ("assist_open", "assist_settle"):
+                    self._advance_assisted_release(ctx, release_assists[s], controller, t)
+                    continue
                 rel = cc.get("release", {}) or {}
                 # Real wrap-up (AriaMimic inference/Inference.py, RobotArmTrossen.open_gripper(goal_time=1.0)):
                 # two arms (_wrap_up_side) halt, open blocking, then go_home(3.0); one arm (run) opens
@@ -617,6 +672,17 @@ class EpisodeRunner:
                     ctx.wrap_phase = "finished"
             # ---- controller ----
             if t >= next_ctl - 1e-9:
+                for s, assist in release_assists.items():
+                    ctx = ctxs[s]
+                    if ctx.is_active and not ctx.is_done and ctx.wrap_phase is None and t < T_max:
+                        if assist.update(t, controller.shared_grip[s] > controller.grasp_threshold):
+                            self._start_assisted_release(ctx, controller, t)
+                            # Only a release already triggered before the episode limit gets
+                            # bounded extra time to open, settle, go home and record the tail.
+                            deadline = max(deadline, t + controller.open_goal_time
+                                           + 2 * assist.settle_timeout + 3.1 + 0.6 + Tc)
+                            if verbose:
+                                print(f"[sim] {s} release assist at t={t:.1f}s -> open + settle + home")
                 controller.tick()
                 next_ctl += Tc
                 for s in sides:
@@ -651,6 +717,10 @@ class EpisodeRunner:
 
         per_side = self.evaluate(ctxs)
         for s_ in per_side:
+            if s_ in release_assists:
+                per_side[s_]["release_assist"] = release_assists[s_].report()
+                if release_assists[s_].outcome == "open_timeout":
+                    per_side[s_]["success"] = False
             if controller.events.get(s_):
                 per_side[s_]["events"] = controller.events[s_][:24]
         success = all(v["success"] for v in per_side.values())

@@ -65,6 +65,33 @@ the grasp point and orientation, waits before closing, and permits one retry.
 The existing 5 cm automatic lift is explicit under `control.forced_lift_*`.
 Bread physics and plate-based idle completion are omitted. Success requires
 the grasped block to be released, settled and fully inside the container.
+The optional `control.release_assist` is enabled in the active pick_cube config.
+At 10 Hz it checks true rigid-body poses, cube contacts with both finger pads,
+the complete oriented block's gravity-drop path into the rounded/tapered cavity,
+and low block/hand velocity relative to the container. The drop region has a
+5 mm interior margin and the block's lowest point must be at most 8 cm above
+the rim. After these conditions hold continuously for 1 s of simulation time
+while the policy still commands closed, the runner halts the hand, mutes policy
+control and opens the gripper. Leaving the region, losing contact, excessive
+motion or a policy open command resets the timer. A tilted container (>5 degrees)
+is excluded. This uses simulator ground truth, not deployable perception.
+
+The assist waits for the measured gripper opening, then requires 0.5 s of
+continuously successful placement before going home (up to 2 s for settling).
+It triggers at most once per episode and cannot be overridden by late policy
+commands or re-grasping. A release that starts before the episode time limit
+gets bounded extra time for this sequence. Triggering is not itself success:
+normal physical placement checks still apply, and failure to open is a failure.
+`meta.result.per_side.right.release_assist` in `episode.json` records the settings,
+trigger time, wait duration, last blocking reason and outcome (`placed`,
+`open_timeout`, `settle_timeout` or `not_triggered`). The generic default is off;
+serve_bread is unchanged. To compare with the unassisted policy:
+
+```bash
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml \
+  --set control.release_assist.enabled=false --seed 0 --video --out pick_cube_no_release_assist
+```
+
 Historical A–E and grasp-study configs remain frozen under `simulation/runs/`;
 active pick_cube parameters are maintained only in `configs/pick_cube.yaml`.
 

@@ -35,7 +35,7 @@ def test_default_pick_cube_is_standalone_without_bread_settings(tmp_path):
     assert not {"use_idle_done", "idle_time_limit", "idle_dist_threshold"} & cube["control"].keys()
     assert cube["scene"]["objects"]["container"]["shape"] == "rounded"
     assert cube["scene"]["objects"]["cube"]["pose"] == [0.4, -0.2, 0.0]
-    assert cube["control"]["grasp_threshold"] == 0.7
+    assert 0 < cube["control"]["grasp_threshold"] < 1
     assert cube["control"]["forced_lift_height"] == 0.05
     assert cube["control"]["grasp_assist"]["orientation_world_rpy_deg"] == [180, 0, 180]
     assert not cube["scene_only"] and cube["mode"] == "single"

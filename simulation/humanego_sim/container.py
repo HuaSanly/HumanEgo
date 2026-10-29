@@ -21,6 +21,15 @@ def contains_points(points: np.ndarray, obj: dict, tolerance: float = 0.001) -> 
     wall = float(obj["wall"])
     if points[:, 2].min() < -half[2] + wall - 0.003 or points[:, 2].max() > half[2] + 0.003:
         return False
+    return contains_xy(points, obj, tolerance)
+
+
+def contains_xy(points: np.ndarray, obj: dict, tolerance: float = 0.001) -> bool:
+    """Check horizontal clearance at each height; negative tolerance adds a margin."""
+    half = np.asarray(obj["size"]) / 2
+    wall = float(obj["wall"])
+    if obj.get("shape") != "rounded":
+        return bool(np.all(np.abs(points[:, :2]) <= half[:2] - wall + tolerance))
     taper = float(obj.get("taper", 0.84))
     t = np.clip((points[:, 2] + half[2] - wall) / (2 * half[2] - wall), 0, 1)
     scale = taper + (1 - taper) * t

@@ -123,6 +123,15 @@ control:
   forced_lift_height: 0.05
   forced_lift_frames: 15
   forced_lift_ramp_frames: 5
+  # 物块在安全放置区域持续停留 1 秒仍未松爪时，接管释放并验证落稳。
+  release_assist:
+    enabled: true
+    wait_time: 1.0
+    interior_margin: 0.005
+    max_height_above_rim: 0.08
+    max_linear_speed: 0.02
+    max_angular_speed: 0.3
+    settle_timeout: 2.0
   grasp_assist:
     enabled: true
     refine: true

@@ -8,7 +8,7 @@ scene_only: false
 profile: production
 
 policy:
-  ckpt: ./runs/pick_cube/server_0.1/latest.pt
+  ckpt: ./runs/pick_cube/HumanEgo_anchor_clean/latest.pt
   num_inference_steps: 20
   seed: 7
 
@@ -57,7 +57,7 @@ scene:
       kind: container
       role: obj1
       pose: [0.2924605431065056, 0.1096122152278755, 0.0]
-      size: [0.1515524680683616, 0.22978338074932372, 0.09647649800453617]
+      size: [0.1515524680683616, 0.22978338074932372, 0.04647649800453617]   #0.09647649800453617
       shape: rounded
       wall: 0.004
       radius: 0.018
@@ -71,7 +71,7 @@ scene:
     cube:
       kind: cube
       role: obj2
-      pose: [0.4, -0.2, 0.0]
+      pose: [0.4, -0.3, 0.0]
       size: [0.03352564560905681, 0.03352564560905681, 0.03352564560905681]
       mass: 0.05
       friction: [0.4, 0.01, 0.001]
@@ -100,7 +100,7 @@ control:
   policy_period: 0.3
   max_episode_time: 40.0
   step_stride: 2
-  look_ahead_offset: 35
+  look_ahead_offset: 45
   max_history_len: 1
   alpha: 0.3
   alpha_rot: 0.0
@@ -110,7 +110,7 @@ control:
   max_pos_step: 0.08
   max_rot_step: 0.08
   safe_z_min: -0.2
-  grasp_threshold: 0.7
+  grasp_threshold: 0.62
   should_grasp_method: any_first_k
   grasp_k_any: 50
   grasp_latch: false

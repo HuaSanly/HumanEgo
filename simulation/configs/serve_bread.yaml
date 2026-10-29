@@ -13,7 +13,7 @@ camera: realsense_d405     # realsense_d405 | realsense_d435 | zed2i | zed_mini
 policy:
   ckpt: ./checkpoints/serve_bread/latest.pt     # huggingface-cli download Leo-TX/HumanEgo --include "serve_bread/*" --local-dir ./checkpoints
   num_inference_steps: 20
-  seed: 0                                       # flow-matching noise seed (fixed per episode, like the real loop)
+  seed: 7                                       # flow-matching noise seed (fixed per episode, like the real loop)
 
 rig:
   # Camera optical centre above the table top. Measured from two real front-view frames
@@ -105,12 +105,12 @@ perception:                # mirrors cfg/inference/serve_bread + cfg/preprocess/
 control:                   # cfg/inference/serve_bread/Control.yaml (real rig)
   control_freq: 10.0
   step_stride: 2
-  look_ahead_offset: 40
+  look_ahead_offset: 35
   max_history_len: 1
   alpha: 0.5
   alpha_rot: 0.0
   duration_smooth_param: 12.0
-  grasp_threshold: 0.6
+  grasp_threshold: 0.70
   should_grasp_method: any_first_k   # 'any' restricted to the next grasp_k_any steps (50 = original 'any')
   grasp_k_any: 50
   tcp_offset: 0.0          # m along the approach axis; 0 = real rig's tool point (t_flange_tool 0.156)

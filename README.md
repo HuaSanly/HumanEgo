@@ -1,361 +1,118 @@
-<h3 align="center">🎉 HumanEgo is now fully released — code, dataset &amp; docs are all live! (June 7, 2026) 🎉</h3>
+# HumanEgo
 
-<p align="center">
-  <a href="https://humanego-ai.github.io">
-    <img src="assets/title/hero.png" alt="HumanEgo — Zero-Shot Robot Learning from Minutes of Human Egocentric Videos" width="100%" />
-  </a>
-</p>
+HumanEgo 使用第一人称视频训练机器人操作策略，包含数据预处理、模型训练、仿真和远程推理服务。以下命令均在项目根目录执行。
 
-<p align="center">
-  <a href="https://tx-leo.github.io">Zhi (Leo) Wang</a> &nbsp;·&nbsp;
-  <a href="https://bottle101.github.io/">Botao He</a> &nbsp;·&nbsp;
-  <a href="https://colinyu1.github.io/">Kelin Yu</a> &nbsp;·&nbsp;
-  <a href="https://sjlee.cc/">Seungjae Lee</a> &nbsp;·&nbsp;
-  <a href="https://ruohangao.github.io/">Ruohan Gao</a> &nbsp;·&nbsp;
-  <a href="https://furong-huang.com/">Furong Huang</a> &nbsp;·&nbsp;
-  <a href="https://robotics.umd.edu/clark/faculty/350/Yiannis-Aloimonos">Yiannis Aloimonos</a>
-</p>
+本仓库统一在 `future-main` 分支开发；未经所有者明确要求，不得创建其他分支。见 [仓库约束](AGENTS.md)。
 
-<p align="center">
-  <a href="https://humanego-ai.github.io"><img src="assets/title/btn_website.png" alt="Website" height="60" /></a>
-  &nbsp;
-  <a href="https://arxiv.org/pdf/2605.24934"><img src="assets/title/btn_paper.png" alt="Paper" height="60" /></a>
-  &nbsp;
-  <a href="https://arxiv.org/abs/2605.24934"><img src="assets/title/btn_arxiv.png" alt="arXiv" height="60" /></a>
-  &nbsp;
-  <a href="https://youtu.be/pdL46diijuY"><img src="assets/title/btn_video.png" alt="Video" height="60" /></a>
-  &nbsp;
-  <a href="#bibtex"><img src="assets/title/btn_bibtex.png" alt="BibTeX" height="60" /></a>
-</p>
-
-<p align="center">
-  <a href="https://huggingface.co/datasets/Leo-TX/HumanEgo"><img src="https://img.shields.io/badge/Dataset-Leo--TX%2FHumanEgo-ff8c2b?style=for-the-badge&logo=huggingface&logoColor=white" alt="HuggingFace Dataset" /></a>
-  &nbsp;
-  <a href="https://huggingface.co/Leo-TX/HumanEgo"><img src="https://img.shields.io/badge/Checkpoints-Leo--TX%2FHumanEgo-e8772e?style=for-the-badge&logo=huggingface&logoColor=white" alt="HuggingFace Checkpoints" /></a>
-  &nbsp;
-  <a href="https://leo-tx-humanego-gallery.static.hf.space"><img src="https://img.shields.io/badge/Data_Gallery-Browse_122_clips-ff6a00?style=for-the-badge&logo=huggingface&logoColor=white" alt="Data Gallery" /></a>
-</p>
-
-<p align="center">
-  <img src="https://komarev.com/ghpvc/?username=tx-leo-humanego&base=5000&label=Views&color=E8772E&style=for-the-badge" alt="Repo views" />
-</p>
-
----
-
-## Overview
-
-<p align="center">
-  <img src="assets/teaser.gif" alt="HumanEgo teaser" width="100%" />
-</p>
-
-There are three ways to use this repo, in increasing order of effort:
-
-1. **[Quick Start in 5 Minutes](#quick-start-in-5-minutes)** — run the whole pipeline
-   end-to-end on two sample recordings, as a smoke test.
-2. **[Train on the HumanEgo Dataset](#train-on-the-humanego-dataset)** — download
-   our full released data (with precomputed labels) and train, no hardware needed.
-3. **[Train Your Own Policy](#train-your-own-policy)** — collect your own
-   egocentric demonstrations with Project Aria glasses and train on them.
-
----
-
-## Installation
+## 安装
 
 ```bash
-git clone https://github.com/TX-Leo/HumanEgo.git
+git clone --branch future-main https://github.com/HuaSanly/HumanEgo.git
 cd HumanEgo
 conda create -n humanego python=3.11 -y
 conda activate humanego
 bash setup.sh
 ```
 
-By default this installs everything the released pipeline needs: PyTorch (with
-CUDA) and the vision foundation models we use (SAM 2, Grounding DINO, CoTracker,
-Orient-Anything V2). The pipeline relies on Project Aria's built-in MPS hand
-tracking, so the alternative hand-detection methods (MediaPipe, WiLoR, HaMeR) and
-the robot/camera hardware drivers are **skipped by default** to keep the install
-lean. Enable them per-run only if you need them:
+PICO Spatial 数据预处理还需要 HaMeR 依赖以及系统中的 `ffmpeg` 和 `ffprobe`：
 
 ```bash
-SKIP_HAND=0     bash setup.sh   # + MediaPipe / WiLoR / HaMeR (alternative hand-tracking methods)
-SKIP_HARDWARE=0 bash setup.sh   # + pyrealsense2 / trossen-arm (real-robot collection & deployment)
-PREDOWNLOAD=1   bash setup.sh   # pre-download model weights now (else fetched on first run)
+SKIP_HAND=0 bash setup.sh      # 安装 HaMeR 等手部跟踪依赖
+
+# 可选：安装硬件驱动或预下载模型权重
+SKIP_HARDWARE=0 bash setup.sh
+PREDOWNLOAD=1 bash setup.sh
 ```
 
----
+## PICO Spatial 数据预处理
 
-## Quick Start in 5 Minutes
-
-<table align="center"><tr>
-<td align="center" width="50%"><img src="assets/aria_vis_serve_bread.gif" width="100%" /><br><sub><code>serve_bread</code> — preprocessing visualization</sub></td>
-<td align="center" width="50%"><img src="assets/aria_vis_water_flowers.gif" width="100%" /><br><sub><code>water_flowers</code> — preprocessing visualization</sub></td>
-</tr></table>
-
-The fastest way to run the whole pipeline end-to-end — download, preprocess, and
-train on just a couple of recordings. The `HumanEgo` training job holds out the
-first recording (`mps_serve_bread_000_vrs`) for evaluation and trains on the
-rest, so download two.
-
-**1. Download two recordings** — inputs only, ~1.2 GB
+将 PICO SpatialMP4 录制文件放在同一目录中，准备对应任务配置（例如 `cfg/preprocess/tasks/pick_cube.yaml`），然后运行：
 
 ```bash
-python scripts/download_data.py --task serve_bread --num 2 --input-only
+# 一次执行准备和后续预处理
+python -m preprocess.SpatialVideoPreprocess --input-dir /path/to/recordings --task pick_cube --stage all
 ```
 
-Fetches `mps_serve_bread_000_vrs` and `mps_serve_bread_001_vrs` into
-`./data/serve_bread/aria/`, skipping the precomputed `preprocess/` output so you
-run the pipeline yourself. See
-[Train on the HumanEgo Dataset](#train-on-the-humanego-dataset) for the full
-dataset and all download options.
+输入目录只扫描其直属的 MP4 文件。输出位于 `data/pick_cube/spatial/spatial_pick_cube_<编号>/preprocess/`，录制索引保存在 `data/pick_cube/spatial_index.json`。也可以先运行 `--stage prepare`，再运行 `--stage downstream`；默认只执行 `prepare`。已完成的阶段会跳过，失败或中断的结果需要人工检查。
 
-**Prefer to skip preprocessing?** Drop `--input-only` to download the two recordings
-**with the precomputed `preprocess/` output** (~4 GB, auto-extracted), then skip
-Step 2 and jump straight to **3. Train**:
+当前适配器使用左目图像和 HaMeR 手部重建，不融合双目或深度数据；默认头部偏移使用未经实测验证的参考值。
+
+## 训练
 
 ```bash
-python scripts/download_data.py --task serve_bread --num 2
+python -m training.FlowMatchingTrainer --task pick_cube --use_cfg --job HumanEgo
 ```
 
-**2. Preprocess both**
+配置位于 `cfg/training/<task>/<job>.yaml`，结果保存在 `runs/<task>/<job>/`。`pick_cube` 配置使用 Spatial 数据，并将编号 `000` 留作评估；至少需要两段数据。详见 [训练文档](training/README.md)。
+
+## 仿真
+
+仿真可使用单独的 Python 3.11 环境：
 
 ```bash
-python -m preprocess.Preprocess --mps_path ./data/serve_bread/aria/mps_serve_bread_000_vrs --task serve_bread
-python -m preprocess.Preprocess --mps_path ./data/serve_bread/aria/mps_serve_bread_001_vrs --task serve_bread
-```
+conda create -n humanego-sim python=3.11 -y
+conda activate humanego-sim
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt -r simulation/requirements.txt
 
-Regenerates each recording's `preprocess/` folder. See
-[Step 2: Preprocessing](#step-2-preprocessing) for details.
-
-**3. Train**
-
-```bash
-python -m training.FlowMatchingTrainer --task serve_bread --use_cfg --job HumanEgo
-```
-
-Trains on `mps_serve_bread_001_vrs` and evaluates on the held-out
-`mps_serve_bread_000_vrs` (config: `cfg/training/serve_bread/HumanEgo.yaml`).
-See [Step 3: Training](#step-3-training) for details.
-
----
-
-## Train on the HumanEgo Dataset
-
-<table align="center"><tr>
-<td align="center" width="50%"><img src="assets/infer_serve_bread.gif" width="100%" /><br><sub><code>serve_bread</code> — learned policy on a real robot</sub></td>
-<td align="center" width="50%"><img src="assets/infer_water_flowers.gif" width="100%" /><br><sub><code>water_flowers</code> — learned policy on a real robot</sub></td>
-</tr></table>
-
-Skip data collection entirely: download our full released dataset — raw Aria
-recordings **and** the precomputed MPS + preprocess output — and train directly.
-Everything is hosted on the public HuggingFace dataset
-[`Leo-TX/HumanEgo`](https://huggingface.co/datasets/Leo-TX/HumanEgo), no login or
-token required. We release two tasks: **`serve_bread`** and **`water_flowers`**.
-
-### Download the full dataset
-
-```bash
-# everything, both tasks, with precomputed preprocess output (large)
-python scripts/download_data.py --task all --num all
-
-# or one task at a time
-python scripts/download_data.py --task serve_bread   --num all
-python scripts/download_data.py --task water_flowers --num all
-```
-
-Each recording lands at `./data/<task>/aria/mps_<task>_<id>_vrs/` with its
-`preprocess/` folder already populated (the `all_data.tar` is auto-extracted).
-Use `--num N` for the first N recordings, or `--input-only` to skip the
-precomputed output and run preprocessing yourself. See
-[`preprocess/README.md`](preprocess/README.md) for the full output-file
-reference and a plain-`huggingface_hub` recipe.
-
-### Train
-
-```bash
-# serve_bread
-python -m training.FlowMatchingTrainer --task serve_bread   --use_cfg --job HumanEgo
-
-# water_flowers
-python -m training.FlowMatchingTrainer --task water_flowers --use_cfg --job HumanEgo
-```
-
-Each job holds out recording `000` of the task for evaluation and trains on the
-rest, reading `cfg/training/<task>/HumanEgo.yaml`. See
-[Step 3: Training](#step-3-training) for the `--task` / `--job` convention.
-
----
-
-## Train Your Own Policy
-
-Collect your own human-egocentric demonstrations and train a policy on them,
-end-to-end — record with Project Aria glasses, process the data through MPS,
-preprocess it, train, and deploy.
-
-### Step 1: Data Collection
-
-<p align="center">
-  <img src="assets/data_collection.gif" alt="HumanEgo data collection — anyone, anytime, anywhere, with only 30 minutes of data" width="100%" />
-</p>
-
-To apply for the Meta Project Aria glasses, see
-[projectaria.com/glasses](https://www.projectaria.com/glasses/).
-
-We are also actively adding support for other hardware — e.g. Meta Aria Gen 2,
-Meta Quest, Apple Vision Pro, RealSense, iPhone, etc. For the Quest setup in
-particular, see
-[`LV-Robotics-Lab/quest_streamer`](https://github.com/LV-Robotics-Lab/quest_streamer).
-
-See [`datacollection/README.md`](datacollection/README.md)
-for the end-to-end guide on recording your own Project Aria data and running
-MPS (SLAM + hand tracking) on it. The resulting data should look like this:
-
-```
-- data
-    - mps_TEST_vrs/
-        - else
-            - sample.vrs.json
-            - vrs_health_check.json
-            - vrs_health_check_slam.json
-        - hand_tracking
-            - hand_tracking_results.csv
-            - summary.json
-        - slam
-            - closed_loop_trajectory.csv
-            - online_calibration.jsonl
-            - open_loop_trajectory.csv
-            - semidense_observations.csv.gz
-            - semidense_points.csv.gz
-            - summary.json
-        - sample.vrs
-```
-
-### Step 2: Preprocessing
-
-<p align="center">
-  <img src="assets/data_collection.webp" alt="HumanEgo preprocessing visualization" width="100%" />
-</p>
-
-Turn raw MPS output into training-ready data. First, create a task config
-`cfg/preprocess/tasks/<your_task>.yaml` describing **your** task — the
-open-vocabulary detection prompts for each object, which hand(s) to track, etc.
-`--task <your_task>` merges it over the defaults in `cfg/preprocess/base/`. See
-[Adding a new task](preprocess/README.md#52-adding-a-new-task) for the
-field-by-field reference. Then point `--mps_path` at the MPS folder from Step 1 and run:
-
-```bash
-python -m preprocess.Preprocess --mps_path ./data/<your_mps_folder> --task <your_task>
-```
-
-This regenerates everything under `…/preprocess/`. See
-**[`preprocess/README.md`](preprocess/README.md)** for the full data layout,
-the output-file reference, the task-config reference, and download options.
-
-### Step 3: Training
-
-<p align="center">
-  <img src="assets/architecture.webp" alt="HumanEgo training architecture" width="100%" />
-</p>
-
-Train a flow-matching policy on the preprocessed data:
-
-```bash
-python -m training.FlowMatchingTrainer --task "YOUR_TASK" --use_cfg --job "YOUR_JOB"
-```
-
-`--task` selects the data + config folder under `cfg/training/` and `--job` selects a
-YAML inside it (e.g. `HumanEgo` → `cfg/training/serve_bread/HumanEgo.yaml`); outputs go
-to `runs/<task>/<job>/`.
-
-**To train on your own task:** preprocess your recordings (Step 2 — you need ≥2, one is
-held out for evaluation), then create `cfg/training/<your_task>/HumanEgo.yaml` (copy
-`cfg/training/serve_bread/HumanEgo.yaml` and set `data_sources`, `single_hand`, etc.).
-See **[`training/README.md`](training/README.md)** for what data training expects, the
-full parameter reference, and how to add your own config.
-
-### Step 4: Inference
-
-The remote-serving scaffold reuses **`inference/policy.py` as the only policy
-implementation**: checkpoint loading, image preparation, ICT construction,
-flow-matching integration and action decoding. The initial baseline is
-`runs/pick_cube/HumanEgo_anchor/latest.pt`, with synchronized, rectified **640×480
-RGB images per eye** and a single right-arm EE state/action contract.
-
-Configuration lives in `cfg/inference/params.yaml`, `intrinsics.yaml` and
-`extrinsics.yaml`. From the repository root, inspect it without loading models:
-
-```bash
-python -m inference.config --config_path cfg/inference/params.yaml
-```
-
-**This is currently a scaffold.** Stereo perception, clean-image rendering,
-native LeRobot registration and export remain explicit unimplemented interfaces.
-Calibration matrices are `null` until verified values are supplied; the old
-synchronous real-robot loop and hardware drivers have been removed. The existing
-simulator still shares the policy; its RGB-D lifting helpers are retained under
-`simulation/humanego_sim/legacy_inference/`.
-
-Released pretrained policies remain available from
-[`Leo-TX/HumanEgo`](https://huggingface.co/Leo-TX/HumanEgo). Each policy needs its
-`latest.pt`, `config.json` and `dataset_stats.json` together. For example:
-
-```bash
+# serve_bread：下载权重、生成场景并运行
 huggingface-cli download Leo-TX/HumanEgo --include "serve_bread/*" --local-dir ./checkpoints
+python simulation/scripts/build_assets.py
+python simulation/scripts/run_episode.py --video
+
+# pick_cube：使用配置中指定的本地模型
+python simulation/scripts/build_assets.py --table-only
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --video --out pick_cube_model
 ```
 
-See **[inference/README.md](inference/README.md)** for module boundaries, coordinate
-and image contracts, configuration validation, preserved policy behavior and
-remaining implementation work.
+运行 `pick_cube` 前，请检查 `simulation/configs/pick_cube.yaml` 中的 checkpoint 路径，并确保同目录包含 `config.json` 和 `dataset_stats.json`。视频和日志保存在 `simulation/runs/`。更多配置及网页回放见 [仿真文档](simulation/README.md)。
 
----
+### pick_cube 多轮测试
 
-## Acknowledgements
+使用已安装仿真依赖的环境，在不同物块、容器位置及模型推理噪声种子下批量测试：
 
-This project builds on excellent open-source work, including
-[Project Aria](https://www.projectaria.com/) (Gen 1 glasses &amp;
-[MPS](https://facebookresearch.github.io/projectaria_tools/docs/intro)),
-[Trossen Arm](https://www.trossenrobotics.com/),
-[CoTracker3](https://github.com/facebookresearch/co-tracker),
-[Grounding DINO](https://github.com/IDEA-Research/GroundingDINO),
-[SAM 2](https://github.com/facebookresearch/sam2),
-[HaMeR](https://github.com/geopavlakos/hamer),
-[WiLoR](https://github.com/rolpotamias/WiLoR),
-[MediaPipe](https://github.com/google-ai-edge/mediapipe),
-[LaMa](https://github.com/advimman/lama),
-and [Orient-Anything](https://github.com/SpatialVision/Orient-Anything).
+```bash
+# 10 个位置组合 × 3 个推理噪声种子 = 30 轮测试，默认单进程运行
+python simulation/scripts/evaluate.py \
+  --config simulation/configs/pick_cube.yaml \
+  --n 10 --scene-seed 7777 --policy-seeds 0 1 2 \
+  --out pick_cube_eval_dev
 
----
+# 中断后继续：读取已冻结的配置和测试清单，跳过已完成的轮次
+python simulation/scripts/evaluate.py --out pick_cube_eval_dev --resume
 
-## License
+# 从已保存的结果更新报告并生成失败轮次的视频，不重新运行模型
+python simulation/scripts/evaluate.py --out pick_cube_eval_dev --report-only --videos failures
+```
 
-HumanEgo is released under the [PolyForm Noncommercial License 1.0.0](LICENSE): free
-for any **noncommercial** use, including academic and nonprofit research. **Commercial
-use (by or for a company) requires a separate paid license** — please get in touch
-(see [Contact](#contact)).
+`--n` 指位置组合数，总测试轮数为 `--n × --policy-seeds 的数量`；`--scene-seed` 控制位置采样，`--policy-seeds` 控制同一模型的推理噪声。默认在当前位置周围每轴 ±3 cm 随机摆放，范围可在 `simulation/configs/eval_pick_cube.yaml` 中调整；使用 `--workers 2` 可开启双进程。
 
----
+结果保存在 `simulation/runs/pick_cube_eval_dev/`：`report.md` 为评测报告，`summary.json` 为汇总统计，`results.csv` 为逐轮结果，`trials.json` 为固定位置和种子清单。首次运行请选择新的 `--out` 名称；后续使用 `--resume`，若需重试程序异常轮次，再添加 `--retry-errors`。
 
-## Contact
+测试沿用任务配置中的抓取、自动抬升和释放辅助设置，实际开关会记录在报告中。冻结配置、复用同一清单比较不同模型或控制参数等用法，见 [多轮评测详细说明](simulation/README.md#reproducible-pick_cube-batch-evaluation)。
 
-<p align="center">
-  <img src="assets/team.png" alt="The HumanEgo team — University of Maryland" width="100%" />
-</p>
+## 推理服务器
 
-Questions are welcome! Reach out to Zhi (Leo) Wang at
-[tx.leo.wz@gmail.com](mailto:tx.leo.wz@gmail.com) (WeChat: `tx-leo-wz`).
+推理服务使用独立的 Python 3.12 环境；以下安装命令要求目标环境目录尚不存在：
 
-**Join our WeChat group** to discuss HumanEgo, ask questions, and stay updated — scan the QR code below:
+```bash
+bash inference/install.sh /absolute/path/to/new-inference-env /path/to/python3.12
+source /absolute/path/to/new-inference-env/bin/activate
 
-<p align="center">
-  <img src="assets/WeChat.jpg" alt="HumanEgo WeChat group QR code" width="260" />
-</p>
+# 检查配置和运行时依赖
+python -m inference.config --config_path cfg/inference/params.yaml --validate-runtime
 
-> If the QR code has expired, add Zhi (Leo) Wang on WeChat (`tx-leo-wz`) and we'll invite you to the group.
 
----
+# 导出部署包并启动服务
+humanego-export --config_path cfg/inference/params.yaml --output runs/deploy/humanego-anchor
+python -m lerobot_policy_humanego.server --config_path runs/deploy/humanego-anchor/server.yaml
+```
 
-<h2 id="bibtex">BibTeX</h2>
+导出前需准备 `cfg/inference/params.yaml` 指定的 checkpoint 及配套文件，并核对双目标定和末端坐标配置。导出目录不能是已有的非空目录。客户端接口和部署说明见 [推理文档](inference/README.md)与[客户端接口](inference/CLIENT_INTERFACE.md)。
 
-If you find this work helpful, we would greatly appreciate it if you cite our paper!
+## 许可与引用
+
+项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，商业使用需要单独授权。[项目主页](https://humanego-ai.github.io) · [论文](https://arxiv.org/abs/2605.24934) · [数据集](https://huggingface.co/datasets/Leo-TX/HumanEgo) · [模型权重](https://huggingface.co/Leo-TX/HumanEgo)
 
 ```bibtex
 @misc{humanego2026,
@@ -367,3 +124,18 @@ If you find this work helpful, we would greatly appreciate it if you cite our pa
   primaryClass  = {cs.RO}
 }
 ```
+
+## Aria 数据下载与预处理
+
+原始 Project Aria 链路仍可使用公开数据集：
+
+```bash
+# 下载两段原始录制及 MPS 数据
+python scripts/download_data.py --task serve_bread --num 2 --input-only
+
+# 逐段运行预处理
+python -m preprocess.Preprocess --mps_path ./data/serve_bread/aria/mps_serve_bread_000_vrs --task serve_bread
+python -m preprocess.Preprocess --mps_path ./data/serve_bread/aria/mps_serve_bread_001_vrs --task serve_bread
+```
+
+去掉 `--input-only` 可下载已预处理的数据；`--num all` 下载该任务的全部录制。详见 [Aria 预处理文档](preprocess/README.md)和[数据采集文档](datacollection/README.md)。

@@ -13,6 +13,7 @@ from .config import load_config, validate_runtime_config
 from .configuration_humanego import HumanEgoConfig
 from .data_types import PreparedObservation
 from .policy import ICTPolicy
+from .runtime_logging import request_tag
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ class HumanEgoPolicy(PreTrainedPolicy):
             )
         else:
             prepared = batch["observation.humanego.prepared"]
+        logger.info("policy_started %s ode_steps=20 prediction_steps=50", request_tag())
         scene = prepared.scene
         x_rgb = self.policy.prepare_image(prepared.clean_bgr)
         ict, mask = self.policy.build_ict(
@@ -145,11 +147,14 @@ class HumanEgoPolicy(PreTrainedPolicy):
                 "ICTPolicy produced a non-finite or malformed action chunk"
             )
         logger.info(
-            "Policy done=%s inference_s=%.4f grasp_range=[%.5f,%.5f]",
+            "policy_completed %s done=%s inference_s=%.4f grasp_range=[%.5f,%.5f] first_action=%s last_action=%s",
+            request_tag(),
             done,
             time.perf_counter() - start,
             float(actions[:, -1].min()),
             float(actions[:, -1].max()),
+            actions[0].astype(np.float64).round(5).tolist(),
+            actions[-1].astype(np.float64).round(5).tolist(),
         )
         return torch.as_tensor(
             actions, dtype=torch.float32, device=self.policy.device

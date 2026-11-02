@@ -20,6 +20,7 @@ from .config import InferenceConfig, load_config, validate_runtime_config
 from .data_types import Observation, PreparedObservation, RobotState, StereoFrame
 from .perception import Perception
 from .rendering import canvas_intrinsics, render_scene
+from .runtime_logging import request_tag
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,15 @@ class HumanEgoProcessor:
     def __call__(self, observation: Observation) -> PreparedObservation:
         validate_observation(observation)
         start = time.perf_counter()
+        logger.info(
+            "observation_validated %s left=%s right=%s ee_xyz_m=%s gripper=%.4f scene=%s",
+            request_tag(),
+            observation.frame.left_rgb.shape,
+            observation.frame.right_rgb.shape,
+            observation.robot.T_ee_in_cam[:3, 3].astype(np.float64).round(5).tolist(),
+            observation.robot.gripper,
+            "initialize" if self.scene is None else "update",
+        )
         scene = (
             self.perception.initialize_scene(observation)
             if self.scene is None
@@ -95,7 +105,11 @@ class HumanEgoProcessor:
         image = render_scene(clean, scene, K, settings)
         self.scene = scene
         self.perception.diagnostics["processor_s"] = time.perf_counter() - start
-        logger.info("Perception %s", self.perception.diagnostics)
+        logger.info(
+            "perception_completed %s diagnostics=%s",
+            request_tag(),
+            self.perception.diagnostics,
+        )
         folder = self.config.deployment.get("diagnostic_dir")
         if folder:
             path = Path(folder)
@@ -141,6 +155,7 @@ class HumanEgoPerceptionStep(ProcessorStep):
         )
         processor = self._processor()
         if probe:
+            logger.info("warmup_probe: startup only, no client observation")
             # Startup-only probe creates no reference, objects or actionable scene.
             zeros = np.zeros((480, 640, 3), np.uint8)
             processor.perception.segmentation.segment(

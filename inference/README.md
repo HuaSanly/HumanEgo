@@ -2,7 +2,7 @@
 
 服务端已实现双目深度、DINO/SAM2 分割、LaMa 去臂、场景更新、训练约定绘图、原策略推理和官方 LeRobot remote 接入。`policy.py` 是唯一策略实现，代码保持不变。网络、归一化、固定噪声、20 步 ODE、sigmoid grasp 与 done 解码均由它完成。
 
-使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，入口为原生 `lerobot-policy-server`，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
+使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，日志入口为 `python -m lerobot_policy_humanego.server`，内部使用官方 `PolicyServer`、`SessionWorker` 和 Zenoh 传输，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
 
 软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 双目基线和校正内参由提供的相机标定计算，EE 与模型 hand 坐标系按约定重合。真机标定、闭环和任务成功率另行验收。
 
@@ -41,7 +41,7 @@ python -m inference.config --config_path cfg/inference/params.yaml --validate-ru
 
 # 正式标定填妥后导出。已有非空目录会被拒绝覆盖。
 humanego-export --config_path cfg/inference/params.yaml --output runs/deploy/humanego-anchor
-lerobot-policy-server --config_path runs/deploy/humanego-anchor/server.yaml
+python -m lerobot_policy_humanego.server --config_path runs/deploy/humanego-anchor/server.yaml
 ```
 
 导出包含：原 checkpoint 与两个 sidecar（`policy/`）、固定噪声、已解析标定和感知/绘图参数（`assets/`）、原生配置、saved processors、版本和文件哈希清单、官方 `server.yaml`。启动不读取原训练目录。DINO/SAM2/LaMa 按固定 Hub revision 从缓存加载，首次使用允许按配置下载；缓存完整时可设 `HF_HUB_OFFLINE=1`。
@@ -49,11 +49,29 @@ lerobot-policy-server --config_path runs/deploy/humanego-anchor/server.yaml
 移动部署包后，参数、噪声和 processor 路径仍相对于包内解析；修改启动路径即可：
 
 ```bash
-lerobot-policy-server --config_path /new/location/server.yaml \
+python -m lerobot_policy_humanego.server --config_path /new/location/server.yaml \
   --model.repo_or_path=/new/location
 ```
 
 原 checkpoint 的两个 sidecar 原样保存，其中历史训练数据路径只是训练元数据，推理不会访问它们。请使用 `humanego-export` 准备部署产物。
+
+## 实时运行日志
+
+使用上面的日志入口启动，部署包 `server.yaml` 中 `log_level: INFO` 即可。已有部署包可直接使用，无需重新导出；更改代码后需重启服务。安装更新后的插件还可使用 `humanego-policy-server --config_path <server.yaml>`。
+
+同一 `request` / `session` / `generation` 关联以下事件：
+
+| 事件 | 含义 |
+| --- | --- |
+| `observation_received` | 官方协议已解码观测；列出观测 ID、feature 形状及 dtype，尚不表示通过校验 |
+| `inference_started` / `observation_validated` | worker 开始处理；数据校验通过，输出实测 EE 位置和夹爪状态 |
+| `perception_completed` / `policy_started` | 感知完成及耗时；开始策略预测 |
+| `policy_completed` | done、耗时、grasp 范围、预测首末动作；仍是完整 50 步预测摘要 |
+| `action_ready` | 官方 runner 整理后的实际动作块已生成，列出形状和处理耗时 |
+| `action_published` | 已调用 Zenoh 发布，列出请求、动作形状、字节数和官方阶段耗时；`delivery_ack=false` 表示没有客户端接收或执行确认 |
+| `inference_failed` / `error_published` / `reply_publish_failed` | 推理异常、向客户端发布错误或传输发布失败 |
+
+启动预热标记为 `warmup_probe`，不计为收到客户端观测。原始 `lerobot-policy-server` 入口仍可使用，但不包含新增的收包、请求关联及发布日志。日志默认输出到终端，不保存完整图像或动作数组。
 
 ## 客户端接口
 

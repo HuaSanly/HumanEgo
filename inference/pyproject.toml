@@ -10,6 +10,7 @@ description = "HumanEgo anchor policy and stereo perception for native LeRobot r
 dependencies = ["numpy>=2,<2.3", "PyYAML>=6", "python-box>=7", "opencv-python-headless>=4.9,<4.14"]
 
 [project.scripts]
+humanego-policy-server = "lerobot_policy_humanego.server:main"
 humanego-export = "lerobot_policy_humanego.export:main"
 
 [tool.setuptools]

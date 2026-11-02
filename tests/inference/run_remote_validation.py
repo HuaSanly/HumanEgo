@@ -78,7 +78,7 @@ def main():
         [
             sys.executable,
             "-m",
-            "lerobot.scripts.lerobot_policy_server",
+            "lerobot_policy_humanego.server",
             "--config_path",
             str((args.bundle / "server.yaml").resolve()),
             "--model.repo_or_path",
@@ -144,6 +144,7 @@ def main():
         request = None
         latencies = []
         server_durations = []
+        request_ids = []
         first = None
         next_tick = time.monotonic()
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -155,6 +156,7 @@ def main():
                     assert runtime.accept(request, result, task_version=0)
                     latencies.append(time.monotonic() - request.submitted_at)
                     server_durations.append(result.server_durations)
+                    request_ids.append(request.request_id)
                     if first is None:
                         first = result.canonical_actions.clone()
                     accepted += 1
@@ -235,6 +237,23 @@ def main():
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=15)
         assert process.returncode == 0
+        server_log = (args.output / "server.log").read_text()
+        for request_id in request_ids:
+            for event in (
+                "observation_received",
+                "inference_started",
+                "observation_validated",
+                "perception_completed",
+                "policy_started",
+                "policy_completed",
+                "action_ready",
+                "action_published",
+            ):
+                assert any(
+                    event in line and f"request={request_id}" in line
+                    for line in server_log.splitlines()
+                ), (event, request_id)
+        assert "error_published" in server_log
         report = dict(
             chunks=accepted,
             recorded_actions=len(robot.actions),
@@ -251,7 +270,7 @@ def main():
             mean_s=float(np.mean(latencies)),
             p95_s=float(np.percentile(latencies, 95)),
             checks=[
-                "actual upstream server process",
+                "official server worker and transport with correlated runtime logs",
                 "Zenoh raw640 stereo",
                 "continuous refill via ChunkRuntime",
                 "canonical float32 50x10",

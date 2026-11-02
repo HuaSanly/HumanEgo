@@ -1,6 +1,8 @@
 """Synchronized stage timings and precision comparison using one real deployment."""
 
 import argparse
+from copy import deepcopy
+from functools import wraps
 from collections import defaultdict
 from contextlib import ExitStack
 import json
@@ -9,6 +11,7 @@ import time
 from unittest.mock import patch
 
 import draccus
+import cv2
 import numpy as np
 import torch
 from lerobot.inference import ExecutionMode, ObservationSnapshot
@@ -33,6 +36,12 @@ def main():
     )
     parser.add_argument("--requests", type=int, default=10)
     parser.add_argument(
+        "--settings", type=Path, help="JSON list of perception overrides"
+    )
+    parser.add_argument(
+        "--diagnostics", choices=["off", "canvas", "full"], default="off"
+    )
+    parser.add_argument(
         "--variants",
         nargs="+",
         default=["float32/float32", "float16/float16", "bfloat16/bfloat16"],
@@ -54,13 +63,29 @@ def main():
         s.processor for s in runner.preprocessor.steps if hasattr(s, "processor")
     )
     processor.config.perception["object_update_mode"] = args.object_update_mode
+    if args.diagnostics == "off":
+        processor.config.deployment["diagnostic_dir"] = None
+    else:
+        processor.config.deployment["diagnostic_dir"] = str(
+            (args.output / "diagnostics").resolve()
+        )
+        processor.config.deployment["diagnostic_mode"] = args.diagnostics
     report["object_update_mode"] = args.object_update_mode
     perception = processor.perception
     engine = perception.segmentation
     policy = runner.policy.policy
     from lerobot_policy_humanego import processor_humanego
 
-    data = np.load(args.observation)
+    if args.observation.is_dir():
+        data = {
+            eye: cv2.cvtColor(
+                cv2.imread(str(args.observation / f"{eye}_rgb.png")), cv2.COLOR_BGR2RGB
+            )
+            for eye in ("left", "right")
+        }
+        data["state"] = np.load(args.observation / "state.npy")
+    else:
+        data = np.load(args.observation)
     features = {
         "observation.images.head_left": data["left"],
         "observation.images.head_right": data["right"],
@@ -69,6 +94,7 @@ def main():
     stages = defaultdict(float)
 
     def timed(fn, name):
+        @wraps(fn)
         def call(*a, **kw):
             torch.cuda.synchronize()
             start = time.perf_counter()
@@ -85,7 +111,7 @@ def main():
         (engine.sam, "predict", "sam_masks"),
         (perception.stereo, "estimate", "stereo"),
         (perception.stereo, "points_from_mask", "keypoints"),
-        (perception.inpainter, "inpaint", "lama"),
+        (type(perception.inpainter), "inpaint", "lama"),
         (processor_humanego, "render_scene", "render"),
         (policy, "prepare_image", "policy_image"),
         (policy, "build_ict", "ict"),
@@ -94,6 +120,10 @@ def main():
         (policy, "decode_ee_in_cam", "action_decode"),
     ]
     reference = None
+    settings = json.loads(args.settings.read_text()) if args.settings else [{}]
+    variants = [(v, s) for s in settings for v in args.variants]
+    original_lama = deepcopy(perception.inpainter.opts)
+    image_processor = engine.processor.image_processor
     args.output.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
         for obj, attr, name in targets:
@@ -106,8 +136,51 @@ def main():
                 engine, "processor", timed(engine.processor, "dino_preprocess")
             )
         )
-        for variant in args.variants:
-            engine.dino_precision, engine.sam_precision = variant.split("/")
+        names = set()
+        for variant_index, (precision, settings) in enumerate(variants):
+            variant = precision
+            if args.settings:
+                variant = settings.get(
+                    "name", f"setting_{variant_index // len(args.variants)}"
+                )
+                if len(args.variants) > 1:
+                    variant += "_" + precision.replace("/", "_")
+            if variant in names:
+                raise ValueError(f"Duplicate benchmark variant name: {variant}")
+            names.add(variant)
+            setup_start = time.perf_counter()
+            engine.dino_precision, engine.sam_precision = precision.split("/")
+            if args.settings:
+                from lerobot_policy_humanego.perception import Inpainter
+
+                processor.config.perception["lama"] = {
+                    **original_lama,
+                    **settings.get("lama", {}),
+                }
+                # Release the previous CUDA session before creating another.
+                if perception.inpainter.executor is not None:
+                    perception.inpainter.executor.shutdown()
+                perception.inpainter = None
+                perception.inpainter = Inpainter(processor.config)
+                image_processor.size["shortest_edge"] = settings.get(
+                    "dino_shortest_edge", 800
+                )
+                engine.joint_object_detection = settings.get(
+                    "joint_object_detection", False
+                )
+                engine.set_dino_kernel(settings.get("dino_cuda_kernel_revision"))
+                # Replacing the session also discards its startup warmup/capture.
+                zeros = np.zeros((480, 640, 3), np.uint8)
+                perception.inpainter.inpaint(
+                    zeros, np.ones((480, 640), bool), np.zeros((480, 640), bool)
+                )
+                engine.segment(
+                    zeros,
+                    processor.config.perception["object_prompts"],
+                    processor.config.perception["erase_prompt"],
+                )
+                torch.cuda.synchronize()
+            setup_s = time.perf_counter() - setup_start
             samples = defaultdict(list)
             runner.reset(full=True)
             try:
@@ -123,6 +196,14 @@ def main():
                     elapsed = time.perf_counter() - start
                     if index == 0:
                         initialization_ms = elapsed * 1000
+                        valid_points = deepcopy(perception.diagnostics["valid_points"])
+                        initial_masks = {
+                            k: v.copy() for k, v in perception.masks.items()
+                        }
+                        initial_poses = {
+                            k: v.T_in_cam.copy()
+                            for k, v in processor.scene.objects.items()
+                        }
                     if index >= 2:
                         samples["total"].append(elapsed)
                         samples["other"].append(elapsed - sum(stages.values()))
@@ -130,10 +211,35 @@ def main():
                             samples[name].append(duration)
                 actions = result.canonical_actions.cpu().numpy()
                 masks = {k: v.copy() for k, v in perception.masks.items()}
+                clean = perception.erase_arms(
+                    processor_humanego.observation_from_batch(
+                        runner._batch(snapshot)
+                    ).frame
+                )
                 if reference is None:
-                    reference = actions.copy(), masks
+                    reference = (
+                        actions.copy(),
+                        masks,
+                        clean.copy(),
+                        initial_masks,
+                        initial_poses,
+                    )
                 position = np.linalg.norm(actions[:, :3] - reference[0][:, :3], axis=1)
                 comparisons = {
+                    "initial_mask_iou": {
+                        k: float(
+                            np.logical_and(v, reference[3][k]).sum()
+                            / max(1, np.logical_or(v, reference[3][k]).sum())
+                        )
+                        for k, v in initial_masks.items()
+                    },
+                    "object_translation_delta_m": {
+                        k: float(np.linalg.norm(v[:3, 3] - reference[4][k][:3, 3]))
+                        for k, v in initial_poses.items()
+                    },
+                    "clean_mae": float(
+                        np.abs(clean.astype(float) - reference[2]).mean()
+                    ),
                     "mask_iou": {
                         k: float(
                             np.logical_and(v, reference[1][k]).sum()
@@ -152,14 +258,20 @@ def main():
                 }
                 report["variants"][variant] = {
                     "initial_scene_ms": initialization_ms,
+                    "variant_setup_s": setup_s,
                     "timings": {k: summary(v) for k, v in samples.items()},
                     "comparison_to_first_variant": comparisons,
-                    "valid_points": perception.diagnostics["valid_points"],
+                    "valid_points": valid_points,
+                    "settings": settings,
+                    "precision": precision,
                 }
                 np.savez(
                     args.output / (variant.replace("/", "_") + ".npz"),
                     actions=actions,
                     **masks,
+                )
+                cv2.imwrite(
+                    str(args.output / f"{variant.replace('/', '_')}_clean.png"), clean
                 )
             except (RuntimeError, ValueError) as exc:
                 report["variants"][variant] = {"error": str(exc)}

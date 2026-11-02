@@ -2,6 +2,7 @@
 lerobot[remote] @ git+https://github.com/huggingface/lerobot.git@5517a326eeb9b457cfe07d59b9bfdf291799c8d9
 transformers==5.4.0
 huggingface-hub==1.6.0
+kernels==0.12.3
 sam2==1.1.0
 onnxruntime-gpu==1.26.0
 python-box==7.4.1

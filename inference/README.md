@@ -129,15 +129,30 @@ deployment:
 → float32 [1,50,10]，连续 grasp 不变
 ```
 
-初始化必须获得 obj1 蓝色容器和 obj2 红块，每个物体至少 8 个有效三维关键点。初始 obj1 被独立复制为 reference，之后物体位置更新不会改写它。默认 `object_update_mode: events`：初始化分别检测 obj1、obj2、机械臂，共三次 DINO；之后每帧仅检测机械臂一次，并跳过双目深度计算。该模式要求未抓取物体保持静止；外力移动物体后需要 reset 重新建立场景。`continuous` 可恢复逐帧定位。
+初始化必须获得 obj1 蓝色容器和 obj2 红块，每个物体至少 8 个有效三维关键点。初始 obj1 被独立复制为 reference，之后物体位置更新不会改写它。默认 `object_update_mode: events`、`joint_object_detection: true`：初始化联合检测两个物体，再单独检测机械臂，共两次 DINO，并共用一次图像预处理。联合提示按各物体的 token 范围分别计分，机械臂仍使用独立提示。之后每帧仅检测机械臂一次，并跳过双目深度计算。该模式要求未抓取物体保持静止；外力移动物体后需要 reset 重新建立场景。`continuous` 可恢复逐帧定位。
 
 只有 obj2 可被抓取关联：实测夹爪闭合且模型 hand 与物体距离小于 0.20m 时锁定相对变换，遮挡期间用实测手位姿传播；释放后保留末次位置并恢复视觉定位。释放触发 obj2 重新检测和双目定位；失败时逐请求重试，超过 `object_ttl_s`（默认 1 秒）明确失败。主动跳过检测的静止物体不计为视觉丢失，也不伪造新的观测时间。`continuous` 模式仍保留原来的逐帧定位与 1 秒丢失超时。
 
-每帧 SAM 只编码一次 RGB 图，再处理物体和双臂/夹爪框。稳定阶段的物体框由当前三维关键点投影产生，因此物体保护 mask 仍逐帧分割，不复用过时的像素坐标；抓取时投影随实测 EE 移动。物体选择对应单实例，去臂取所有候选的 mask 并集。LaMa 使用 BGR、512×512、9×9 膨胀两次及训练侧 Gaussian 融合；修复区域保护可见物体。空去臂 mask 跳过修复并记录 `empty_mask`，不会记录为 `inpainted`。
+每帧 SAM 只编码一次 RGB 图，再将物体和双臂/夹爪框批量解码一次，按框所属类别分别合并 mask。SAM 保留 1024 输入。稳定阶段的物体框由当前三维关键点投影产生，因此物体保护 mask 仍逐帧分割，不复用过时的像素坐标；抓取时投影随实测 EE 移动。物体选择对应单实例，去臂取所有候选的 mask 并集。LaMa 使用 BGR、512×512、9×9 膨胀两次及训练侧 Gaussian 融合；修复区域保护可见物体。空去臂 mask 跳过修复并记录 `empty_mask`，不会记录为 `inpainted`。
 
 官方启动零输入预热只在首次 reset 之前可用，不创建场景。预热执行真实感知模型和原策略计算；启动 reset 后永久关闭这条探测分支。之后即使任务字符串为 `warmup`，非法零位姿也会正常失败。reset 保留模型资源与固定噪声。
 
 DINO 与 SAM 默认分别使用 `segmentation.dino_precision: float16`、`sam_precision: float16` 的局部 autocast；原策略和 LaMa 保持 FP32。可设置 `float32` 回退，`bfloat16` 仅用于显式实验。旧部署包缺少这些配置时保持原 FP32/continuous 行为，需要重新导出才能启用优化。
+
+默认 DINO 保留 800 短边、完整编码器/解码器和 900 queries。`dino_cuda_kernel_revision` 固定融合可变形注意力算子的 Hub commit，使用 `kernels==0.12.3` 加载匹配 Torch 2.7 / CUDA 12.6 的预编译算子；采样和累加输入统一为 FP32，避免 autocast 混合 dtype 导致错误。首次运行需联网填充算子缓存，完整缓存后支持 `HF_HUB_OFFLINE=1`。将 revision 设为 `null` 可使用原 PyTorch 算子。
+
+LaMa 默认 `static_batch: true`、`cuda_graph: true`：固定 batch=1，在启动预热时捕获 CUDA Graph，后续请求更新固定 GPU 输入缓冲并回放；输出同样绑定固定地址。ORT 按调用线程缓存 Graph，因此启动预热和正式请求都通过同一个 LaMa 执行线程，避免 worker 首请求重新捕获。reset 保留这些缓冲，但每次请求都会更新图像和 mask。该实例与场景处理器一样按请求串行使用。旧部署包缺少新配置时仍使用原运行方式；启用需更新包内 `assets/params.yaml` 并重启服务。
+
+2026-11-02 在本机 RTX 3060 上，对四帧真实机械臂双目画面各测 10 次稳定请求，另测首次场景定位，并比较 mask、物体位置、修复图与完整动作。阶段计时使用 CUDA 同步，不含网络与文件诊断；首次定位不含服务启动预热。详细结果保存在 `runs/inference-validation/optimization/`。此对比的基线已使用 FP16 和 events，线上 full 诊断还会产生额外耗时。测试过的 DINO 缩图、减少 queries、LaMa 半精度和 SAM 缩图配置未作为默认值，原因是漏检、修复伪影或动作偏差。
+
+| 测量项 | 原算子/逐物体 DINO | 当前配置 |
+| --- | --- | --- |
+| 本地首次场景定位，四帧平均 | 1098 ms | 645 ms |
+| 本地稳定请求，40 次平均 | 595 ms | 478 ms |
+| DINO，每次稳定请求 | 231 ms | 135 ms |
+| LaMa，每次稳定请求 | 203 ms | 180 ms |
+
+上表基线也已共用 DINO 图像预处理和批量 SAM 解码；更改前的原始 FP16 稳定请求另测为 614 ms。四帧中初始物体 mask 最低 IoU 98.75%，机械臂最低 99.76%；物体平移最大变化 0.29 mm，最终 50 步动作的位置最大变化 6.8 mm，grasp 最大变化 0.00212。这些数值是相对原实现的差异，未度量真机任务成功率。独立服务进程与官方客户端的六次 Zenoh 回环（真实训练录制双目，关闭文件诊断）首请求 631 ms、稳定平均 464 ms、稳定 P95 471 ms；网络部署的结果还取决于链路和诊断设置。完整诊断不适合作为延迟基准，日常可设 `diagnostic_mode: canvas` 或 `diagnostic_dir: null`。
 
 日志包含初始化、当前请求的 `localized_objects`、关键点数、mask 像素、阶段耗时和 done。`gripper_projection` 输出夹爪绘点数、深度裁剪数、画外点数及投影范围；无可见点时为 WARNING。`deployment.diagnostic_dir: null` 默认不逐帧写图；显式设置目录后才保存模型画布及同名 JSON，包含接收的 EE 位姿、模型 hand 位姿、画布内参和绘制统计。
 

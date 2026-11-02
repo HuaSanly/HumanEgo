@@ -1,6 +1,7 @@
 """Persistent GPU vision, metric object updates and episode grasp association."""
 
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 import logging
 import time
@@ -30,12 +31,17 @@ class Segmentation:
         self.threshold = opts["box_threshold"]
         self.dino_precision = opts.get("dino_precision", "float32")
         self.sam_precision = opts.get("sam_precision", "float32")
+        self.joint_object_detection = opts.get("joint_object_detection", False)
         for precision in (self.dino_precision, self.sam_precision):
             if precision not in ("float32", "float16", "bfloat16"):
                 raise ValueError(f"Unsupported segmentation precision: {precision}")
         self.processor = AutoProcessor.from_pretrained(
             opts["dino_model_id"], revision=opts["dino_revision"], backend="pil"
         )
+        self.processor.image_processor.size = {
+            "shortest_edge": opts.get("dino_shortest_edge", 800),
+            "longest_edge": 1333,
+        }
         self.model = (
             AutoModelForZeroShotObjectDetection.from_pretrained(
                 opts["dino_model_id"], revision=opts["dino_revision"]
@@ -43,6 +49,7 @@ class Segmentation:
             .to(self.device)
             .eval()
         )
+        self.set_dino_kernel(opts.get("dino_cuda_kernel_revision"))
         checkpoint = hf_hub_download(
             opts["sam2_repo_id"], "sam2_hiera_tiny.pt", revision=opts["sam2_revision"]
         )
@@ -55,6 +62,43 @@ class Segmentation:
             )
         )
 
+    def set_dino_kernel(self, revision):
+        from transformers.models.grounding_dino.modeling_grounding_dino import (
+            MultiScaleDeformableAttention,
+        )
+
+        if revision:
+            from kernels import get_kernel
+
+            kernel = get_kernel("kernels-community/deformable-detr", revision=revision)
+
+            def forward(
+                value,
+                spatial_shapes,
+                spatial_shapes_list,
+                level_start_index,
+                sampling_locations,
+                attention_weights,
+                im2col_step,
+            ):
+                # Autocast produces mixed input types. The fused operator needs
+                # one dtype; FP32 matches grid_sample's existing accumulation.
+                return kernel.ms_deform_attn_forward(
+                    value.float().contiguous(),
+                    spatial_shapes,
+                    level_start_index,
+                    sampling_locations.float().contiguous(),
+                    attention_weights.float().contiguous(),
+                    im2col_step,
+                )
+
+        for module in self.model.modules():
+            if isinstance(module, MultiScaleDeformableAttention):
+                if revision:
+                    module.forward = forward
+                elif "forward" in module.__dict__:
+                    del module.forward
+
     def _autocast(self, precision):
         import torch
 
@@ -66,23 +110,18 @@ class Segmentation:
 
     def segment(self, rgb, object_prompts, erase_prompt, object_boxes=None):
         import torch
-        from PIL import Image
 
         trace = current_trace()
         with torch.inference_mode():
             with self._autocast(self.sam_precision):
                 self.sam.set_image(rgb)
             masks = {}
+            box_groups = {}
             prompts = {**object_prompts, "arms": erase_prompt}
-            for key, prompt in prompts.items():
-                batch = self.processor(
-                    images=Image.fromarray(rgb), text=prompt, return_tensors="pt"
-                ).to(self.device)
-                with self._autocast(self.dino_precision):
-                    output = self.model(**batch)
-                scores = output.logits.sigmoid().amax(-1)[0]
+            for key, scores, predicted_boxes in self._detect(rgb, prompts):
+                prompt = prompts[key]
                 keep = scores > self.threshold
-                boxes = output.pred_boxes[0, keep]
+                boxes = predicted_boxes[keep]
                 if not len(boxes):
                     if trace:
                         trace.json(
@@ -113,11 +152,7 @@ class Segmentation:
                             "candidate_scores": scores[keep].float().cpu().tolist(),
                         },
                     )
-                with self._autocast(self.sam_precision):
-                    result, _, _ = self.sam.predict(
-                        box=boxes_numpy, multimask_output=False
-                    )
-                masks[key] = np.any(result.reshape(-1, *rgb.shape[:2]), axis=0)
+                box_groups[key] = boxes_numpy
             # Existing metric poses provide prompts without another DINO forward.
             for key, box in (object_boxes or {}).items():
                 if trace:
@@ -131,10 +166,75 @@ class Segmentation:
                 if box is None:
                     masks[key] = np.zeros(rgb.shape[:2], bool)
                     continue
+                box_groups[key] = np.asarray(box).reshape(-1, 4)
+            # Decode all independent box prompts together, retaining the union
+            # for multi-arm detections and one mask per protected object.
+            if box_groups:
                 with self._autocast(self.sam_precision):
-                    result, _, _ = self.sam.predict(box=box, multimask_output=False)
-                masks[key] = np.any(result.reshape(-1, *rgb.shape[:2]), axis=0)
+                    result, _, _ = self.sam.predict(
+                        box=np.concatenate(list(box_groups.values())),
+                        multimask_output=False,
+                    )
+                result = result.reshape(-1, *rgb.shape[:2])
+                offset = 0
+                for key, boxes in box_groups.items():
+                    masks[key] = np.any(result[offset : offset + len(boxes)], axis=0)
+                    offset += len(boxes)
         return masks
+
+    def _detect(self, rgb, prompts):
+        from PIL import Image
+
+        image = Image.fromarray(rgb)
+        objects = {k: v for k, v in prompts.items() if k != "arms"}
+        joint_objects = self.joint_object_detection and len(objects) > 1
+        if joint_objects:
+            caption = " ".join(
+                prompt.strip().rstrip(".") + " ." for prompt in objects.values()
+            )
+            joint_objects = (
+                len(self.processor.tokenizer(caption)["input_ids"])
+                <= self.model.config.max_text_len
+            )
+        groups = [objects] if joint_objects else [{k: v} for k, v in objects.items()]
+        groups.append({"arms": prompts["arms"]})
+        image_inputs = None
+        for group in groups:
+            text = ""
+            spans = {}
+            for key, prompt in group.items():
+                start = len(text)
+                text += prompt.strip().rstrip(".") + " . "
+                spans[key] = (start, len(text))
+            batch = self.processor(
+                images=image if image_inputs is None else None,
+                text=text,
+                return_tensors="pt",
+            ).to(self.device)
+            if image_inputs is None:
+                image_inputs = {
+                    key: batch[key] for key in ("pixel_values", "pixel_mask")
+                }
+            else:
+                batch.update(image_inputs)
+            with self._autocast(self.dino_precision):
+                output = self.model(**batch)
+            probabilities = output.logits[0].sigmoid()
+            if len(group) == 1:
+                yield next(iter(group)), probabilities.amax(-1), output.pred_boxes[0]
+                continue
+            offsets = self.processor.tokenizer(text, return_offsets_mapping=True)[
+                "offset_mapping"
+            ]
+            for key, (start, end) in spans.items():
+                # Restrict each label to its own caption tokens. Otherwise a
+                # confident arm could incorrectly become the object candidate.
+                indices = [
+                    i
+                    for i, (a, b) in enumerate(offsets)
+                    if b > a and a >= start and b <= end
+                ]
+                yield key, probabilities[:, indices].amax(-1), output.pred_boxes[0]
 
 
 class Inpainter:
@@ -151,14 +251,25 @@ class Inpainter:
         )
         ort.preload_dlls()
         device_id = torch.device(config.policy["device"]).index or 0
+        self.device_id = device_id
+        self.binding = None
+        self.cuda_inputs = {}
+        self.cuda_outputs = {}
+        session_options = ort.SessionOptions()
+        # Requests contain exactly one image. Resolve shape arithmetic at startup
+        # instead of copying shape tensors between CPU and CUDA for every FFT.
+        if self.opts.get("static_batch", False) or self.opts.get("cuda_graph", False):
+            session_options.add_free_dimension_override_by_name("batch", 1)
         self.session = ort.InferenceSession(
             path,
+            sess_options=session_options,
             providers=[
                 (
                     "CUDAExecutionProvider",
                     {
                         "device_id": device_id,
                         "cudnn_conv_algo_search": "HEURISTIC",
+                        "enable_cuda_graph": int(self.opts.get("cuda_graph", False)),
                     },
                 ),
                 "CPUExecutionProvider",
@@ -168,6 +279,17 @@ class Inpainter:
             raise RuntimeError(
                 "LaMa requires CUDAExecutionProvider; GPU initialization failed"
             )
+        # ORT caches graph captures per calling thread. Startup warmup and the
+        # server worker must run on the same thread to reuse that capture.
+        self.executor = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="humanego-lama")
+            if self.opts.get("cuda_graph", False)
+            else None
+        )
+
+    def _run_graph(self):
+        self.session.run_with_iobinding(self.binding)
+        return self.binding.copy_outputs_to_cpu()[0]
 
     def inpaint(self, bgr, mask, protected):
         mask = cv2.dilate(
@@ -196,7 +318,31 @@ class Inpainter:
                 image_bgr=inputs[self.session.get_inputs()[0].name],
                 mask=inputs[self.session.get_inputs()[1].name],
             )
-        model_output = self.session.run(None, inputs)[0]
+        if self.opts.get("cuda_graph", False):
+            import onnxruntime as ort
+
+            if self.binding is None:
+                self.binding = self.session.io_binding()
+                for name, value in inputs.items():
+                    self.cuda_inputs[name] = ort.OrtValue.ortvalue_from_numpy(
+                        np.ascontiguousarray(value), "cuda", self.device_id
+                    )
+                    self.binding.bind_ortvalue_input(name, self.cuda_inputs[name])
+                for output_meta in self.session.get_outputs():
+                    output_buffer = ort.OrtValue.ortvalue_from_shape_and_type(
+                        (1, 3, *self.opts["input_size_hw"]),
+                        np.float32,
+                        "cuda",
+                        self.device_id,
+                    )
+                    self.cuda_outputs[output_meta.name] = output_buffer
+                    self.binding.bind_ortvalue_output(output_meta.name, output_buffer)
+            else:
+                for name, value in inputs.items():
+                    self.cuda_inputs[name].update_inplace(np.ascontiguousarray(value))
+            model_output = self.executor.submit(self._run_graph).result()
+        else:
+            model_output = self.session.run(None, inputs)[0]
         if trace:
             trace.array("lama/output.npy", model_output)
         output = model_output[0].transpose(1, 2, 0)

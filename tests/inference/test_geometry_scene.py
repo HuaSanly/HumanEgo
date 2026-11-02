@@ -42,6 +42,87 @@ def observation(x=0, gripper=0):
     return Observation(StereoFrame(image, image), RobotState(pose(x), gripper))
 
 
+def test_batched_sam_keeps_arm_union_separate_from_protected_objects():
+    from unittest.mock import Mock
+    from lerobot_policy_humanego.perception import Segmentation
+
+    engine = Segmentation.__new__(Segmentation)
+    engine.sam_precision = "float32"
+    engine.threshold = 0.3
+    engine.sam = Mock()
+    # Two arm boxes plus the projected object; each must remain independent.
+    masks = np.zeros((3, 1, 8, 8), bool)
+    masks[0, 0, :2, :2] = True
+    masks[1, 0, -2:, -2:] = True
+    masks[2, 0, 3:5, 3:5] = True
+    engine.sam.predict.return_value = masks, None, None
+    import torch
+
+    engine._detect = lambda *args: iter(
+        [
+            (
+                "arms",
+                torch.tensor([0.9, 0.8]),
+                torch.tensor([[0.1, 0.1, 0.2, 0.2], [0.9, 0.9, 0.2, 0.2]]),
+            )
+        ]
+    )
+    result = engine.segment(
+        np.zeros((8, 8, 3), np.uint8),
+        {},
+        "arms",
+        object_boxes={"obj1": np.array([3, 3, 5, 5]), "obj2": None},
+    )
+    engine.sam.set_image.assert_called_once()
+    engine.sam.predict.assert_called_once()
+    np.testing.assert_array_equal(result["arms"], masks[:2, 0].any(0))
+    np.testing.assert_array_equal(result["obj1"], masks[2, 0])
+    assert not result["obj2"].any()
+    assert not (result["arms"] & result["obj1"]).any()
+
+
+def test_joint_dino_captions_over_text_limit_use_separate_forwards():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import torch
+    from lerobot_policy_humanego.perception import Segmentation
+
+    class Batch(dict):
+        def to(self, device):
+            return self
+
+    class Processor:
+        def __init__(self):
+            self.images_prepared = 0
+
+        def tokenizer(self, text):
+            return {"input_ids": text.split()}
+
+        def __call__(self, *, images, text, return_tensors):
+            self.images_prepared += images is not None
+            return Batch(pixel_values=torch.zeros(1), pixel_mask=torch.ones(1))
+
+    engine = Segmentation.__new__(Segmentation)
+    engine.joint_object_detection = True
+    engine.dino_precision, engine.device = "float32", "cpu"
+    engine.processor = Processor()
+    engine.model = Mock(
+        config=SimpleNamespace(max_text_len=256),
+        return_value=SimpleNamespace(
+            logits=torch.zeros(1, 1, 256), pred_boxes=torch.zeros(1, 1, 4)
+        ),
+    )
+    detections = list(
+        engine._detect(
+            np.zeros((8, 8, 3), np.uint8),
+            {"obj1": "blue " * 132, "obj2": "red " * 132, "arms": "arms ."},
+        )
+    )
+    assert [key for key, *_ in detections] == ["obj1", "obj2", "arms"]
+    assert engine.model.call_count == 3
+    assert engine.processor.images_prepared == 1
+
+
 def test_metric_stereo_and_reverse_consistency():
     estimator = StereoDepthEstimator(config())
     rng = np.random.default_rng(91)

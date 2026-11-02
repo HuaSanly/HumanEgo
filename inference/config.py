@@ -89,6 +89,27 @@ def load_config(path: str | Path) -> InferenceConfig:
             "bfloat16",
         ):
             raise ValueError(f"segmentation.{key} must be float32, float16 or bfloat16")
+    segmentation = perception.get("segmentation", {})
+    revision = segmentation.get("dino_cuda_kernel_revision")
+    if revision is not None and (
+        not isinstance(revision, str)
+        or len(revision) != 40
+        or any(character not in "0123456789abcdef" for character in revision)
+    ):
+        raise ValueError(
+            "segmentation.dino_cuda_kernel_revision must be a pinned 40-character commit"
+        )
+    for key in ("dino_shortest_edge",):
+        size = segmentation.get(key, 800)
+        if type(size) is not int or not 32 <= size <= 1333:
+            raise ValueError(f"segmentation.{key} must be an integer in [32, 1333]")
+    for group, keys in (
+        ("segmentation", ("joint_object_detection",)),
+        ("lama", ("static_batch", "cuda_graph")),
+    ):
+        for key in keys:
+            if type(perception.get(group, {}).get(key, False)) is not bool:
+                raise ValueError(f"{group}.{key} must be a boolean")
 
     deployment = dict(values["deployment"])
     if deployment.get("diagnostic_mode", "canvas") not in ("canvas", "full"):

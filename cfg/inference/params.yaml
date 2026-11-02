@@ -31,6 +31,9 @@ perception:
     box_threshold: 0.3
     dino_precision: float16
     sam_precision: float16
+    dino_shortest_edge: 800
+    dino_cuda_kernel_revision: a4431ff2d5767c279f0ff2335a87a6828b77c7a0
+    joint_object_detection: true
   lama:
     repo_id: Carve/LaMa-ONNX
     revision: c3c0c9e468934d62e79c329e35d82dd09ff8c444
@@ -39,6 +42,8 @@ perception:
     - 512
     - 512
     mask_dilation: 9
+    static_batch: true
+    cuda_graph: true
   rendering:
     canvas_hw:
     - 1232

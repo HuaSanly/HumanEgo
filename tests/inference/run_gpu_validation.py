@@ -1,6 +1,7 @@
 """Real CUDA perception + native runner + original-policy numerical comparison."""
 
 import argparse
+from copy import deepcopy
 import json
 import logging
 from pathlib import Path
@@ -109,6 +110,31 @@ def main():
     cleaned = processor.perception.erase_arms(prepared.frame)
     original = cv2.cvtColor(prepared.frame.left_rgb, cv2.COLOR_RGB2BGR)
     np.testing.assert_array_equal(cleaned[protected], original[protected])
+    if processor.config.perception["lama"].get("cuda_graph", False):
+        from lerobot_policy_humanego.perception import Inpainter
+
+        reference_config = deepcopy(processor.config)
+        reference_config.perception["lama"]["cuda_graph"] = False
+        reference_inpainter = Inpainter(reference_config)
+        inpainter = processor.perception.inpainter
+        pointers = {k: v.data_ptr() for k, v in inpainter.cuda_inputs.items()}
+        pointers.update({k: v.data_ptr() for k, v in inpainter.cuda_outputs.items()})
+        arm_mask = processor.perception.masks["arms"]
+        # Replay with a different image AND mask, then return to the first input.
+        for image, erase in (
+            (original, arm_mask),
+            (original[:, ::-1], np.roll(arm_mask, 40, axis=1)),
+            (original, arm_mask),
+        ):
+            actual = inpainter.inpaint(image, erase, protected)
+            expected_image = reference_inpainter.inpaint(image, erase, protected)
+            assert np.abs(actual.astype(np.int16) - expected_image).max() <= 1
+            np.testing.assert_array_equal(actual[protected], image[protected])
+        assert pointers == {
+            k: v.data_ptr()
+            for k, v in {**inpainter.cuda_inputs, **inpainter.cuda_outputs}.items()
+        }
+        del reference_inpainter
     args.output.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(args.output / "clean.png"), cleaned)
     cv2.imwrite(str(args.output / "canvas.png"), prepared.clean_bgr)
@@ -131,7 +157,8 @@ def main():
     else:
         raise AssertionError("Startup probe remained reachable after reset")
     if processor.config.perception.get("object_update_mode") == "events":
-        assert dino_calls == [3] + [1] * (args.requests - 1)
+        initial_calls = 2 if engine.joint_object_detection else 3
+        assert dino_calls == [initial_calls] + [1] * (args.requests - 1)
 
     dual = data["left"].copy()
     dual[300:, :220] = data["left"][300:, -220:][:, ::-1]
@@ -177,6 +204,9 @@ def main():
             "continuous grasp",
             "startup probe closes",
             "reset keeps noise",
+            "CUDA graph replay uses fresh images/masks and stable buffers"
+            if processor.config.perception["lama"].get("cuda_graph", False)
+            else "LaMa ordinary CUDA execution",
         ],
     )
     (args.output / "report.json").write_text(json.dumps(report, indent=2))

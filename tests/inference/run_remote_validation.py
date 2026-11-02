@@ -145,6 +145,7 @@ def main():
         latencies = []
         server_durations = []
         request_ids = []
+        accepted_actions = []
         first = None
         next_tick = time.monotonic()
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -157,6 +158,9 @@ def main():
                     latencies.append(time.monotonic() - request.submitted_at)
                     server_durations.append(result.server_durations)
                     request_ids.append(request.request_id)
+                    accepted_actions.append(
+                        result.canonical_actions.cpu().numpy().copy()
+                    )
                     if first is None:
                         first = result.canonical_actions.clone()
                     accepted += 1
@@ -254,6 +258,49 @@ def main():
                     for line in server_log.splitlines()
                 ), (event, request_id)
         assert "error_published" in server_log
+        params = yaml.safe_load((args.bundle / "assets/params.yaml").read_text())
+        if params["deployment"].get("diagnostic_mode") == "full" and params[
+            "deployment"
+        ].get("diagnostic_dir"):
+            root = Path(params["deployment"]["diagnostic_dir"])
+            for request_id, received_actions in zip(
+                request_ids, accepted_actions, strict=True
+            ):
+                folders = list(root.glob(f"run_*/*/*/{request_id}"))
+                assert len(folders) == 1
+                folder = folders[0]
+                for name in (
+                    "input/left_rgb.png",
+                    "input/right_rgb.png",
+                    "input/state.npy",
+                    "masks/arms.png",
+                    "clean.png",
+                    "render_model_canvas.png",
+                    "render_model_canvas.json",
+                    "scene.json",
+                    "model/image_rgb.png",
+                    "model/image_rgb_float32.npy",
+                    "model/inputs.npz",
+                    "model/prediction.npz",
+                    "output/predicted_ee_actions.npy",
+                    "publication.json",
+                ):
+                    assert (folder / name).exists(), name
+                for name in ("returned_actions", "published_actions"):
+                    np.testing.assert_array_equal(
+                        np.load(folder / f"output/{name}.npy"), received_actions
+                    )
+                assert (
+                    json.loads((folder / "request.json").read_text())["status"]
+                    == "completed"
+                )
+                projection = json.loads(
+                    (folder / "render_model_canvas.json").read_text()
+                )
+                assert projection["rendering"]["hand"]["points_drawn"] > 0
+                assert (
+                    np.load(folder / "model/inputs.npz")["ict_mask"].dtype == np.bool_
+                )
         report = dict(
             chunks=accepted,
             recorded_actions=len(robot.actions),

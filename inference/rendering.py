@@ -57,10 +57,21 @@ def gripper_points(gripper: float, settings=None):
 
 def _draw(image, points, pose, K, radius, colors, core):
     camera = np.asarray(points).reshape(-1, 3) @ pose[:3, :3].T + pose[:3, 3]
+    stats = {
+        "points_total": len(camera),
+        "points_drawn": 0,
+        "depth_clipped": 0,
+        "outside_image": 0,
+        "camera_xyz_min_m": camera.min(axis=0).tolist() if len(camera) else None,
+        "camera_xyz_max_m": camera.max(axis=0).tolist() if len(camera) else None,
+    }
+    projected = []
     for p, color in zip(camera, colors, strict=True):
         if p[2] <= 0.1:
+            stats["depth_clipped"] += 1
             continue
         uv = K @ p
+        projected.append((uv[:2] / uv[2]).tolist())
         x, y = (uv[:2] / uv[2]).astype(int)
         if (
             -radius <= x < image.shape[1] + radius
@@ -70,17 +81,28 @@ def _draw(image, points, pose, K, radius, colors, core):
                 image, (x, y), radius, tuple(int(c) for c in color), -1, cv2.LINE_AA
             )
             cv2.circle(image, (x, y), core, (255, 255, 255), -1, cv2.LINE_AA)
+            stats["points_drawn"] += 1
+        else:
+            stats["outside_image"] += 1
+    stats["uv_min_px"] = np.min(projected, axis=0).tolist() if projected else None
+    stats["uv_max_px"] = np.max(projected, axis=0).tolist() if projected else None
+    return stats
 
 
 def render_scene(
-    background_bgr: np.ndarray, scene: SceneState, K: np.ndarray, settings=None
+    background_bgr: np.ndarray,
+    scene: SceneState,
+    K: np.ndarray,
+    settings=None,
+    *,
+    diagnostics=None,
 ) -> np.ndarray:
     """K matches the 640x480 input; output uses the training reference canvas."""
     opts = TRAINING_RENDERING if settings is None else settings
     image = cv2.resize(background_bgr, tuple(opts["canvas_hw"][::-1]))
     K = canvas_intrinsics(K, canvas_hw=opts["canvas_hw"])
     points, colors = zip(*gripper_points(scene.gripper, opts))
-    _draw(
+    hand_stats = _draw(
         image,
         points,
         scene.hand_in_cam,
@@ -89,8 +111,10 @@ def render_scene(
         colors,
         opts["white_core_radius"],
     )
+    if diagnostics is not None:
+        diagnostics["hand"] = hand_stats
     for key, obj in scene.objects.items():
-        _draw(
+        object_stats = _draw(
             image,
             obj.kpts_local,
             obj.T_in_cam,
@@ -99,4 +123,6 @@ def render_scene(
             [opts["object_colors"][key]] * len(obj.kpts_local),
             opts["white_core_radius"],
         )
+        if diagnostics is not None:
+            diagnostics[key] = object_stats
     return image

@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from .config import InferenceConfig
+from .diagnostics import current_trace
 from .data_types import ObjectState, Observation, SceneState, StereoFrame
 from .stereo import StereoDepthEstimator
 
@@ -67,6 +68,7 @@ class Segmentation:
         import torch
         from PIL import Image
 
+        trace = current_trace()
         with torch.inference_mode():
             with self._autocast(self.sam_precision):
                 self.sam.set_image(rgb)
@@ -82,6 +84,15 @@ class Segmentation:
                 keep = scores > self.threshold
                 boxes = output.pred_boxes[0, keep]
                 if not len(boxes):
+                    if trace:
+                        trace.json(
+                            f"detections/{key}.json",
+                            {
+                                "prompt": prompt,
+                                "boxes_xyxy": [],
+                                "threshold": self.threshold,
+                            },
+                        )
                     masks[key] = np.zeros(rgb.shape[:2], bool)
                     continue
                 if key != "arms":
@@ -91,13 +102,32 @@ class Segmentation:
                 xyxy *= xyxy.new_tensor(
                     [rgb.shape[1], rgb.shape[0], rgb.shape[1], rgb.shape[0]]
                 )
+                boxes_numpy = xyxy.float().cpu().numpy()
+                if trace:
+                    trace.json(
+                        f"detections/{key}.json",
+                        {
+                            "prompt": prompt,
+                            "threshold": self.threshold,
+                            "selected_boxes_xyxy": boxes_numpy.tolist(),
+                            "candidate_scores": scores[keep].float().cpu().tolist(),
+                        },
+                    )
                 with self._autocast(self.sam_precision):
                     result, _, _ = self.sam.predict(
-                        box=xyxy.float().cpu().numpy(), multimask_output=False
+                        box=boxes_numpy, multimask_output=False
                     )
                 masks[key] = np.any(result.reshape(-1, *rgb.shape[:2]), axis=0)
             # Existing metric poses provide prompts without another DINO forward.
             for key, box in (object_boxes or {}).items():
+                if trace:
+                    trace.json(
+                        f"detections/{key}.json",
+                        {
+                            "source": "scene_projection",
+                            "box_xyxy": None if box is None else box.tolist(),
+                        },
+                    )
                 if box is None:
                     masks[key] = np.zeros(rgb.shape[:2], bool)
                     continue
@@ -146,6 +176,9 @@ class Inpainter:
             iterations=2,
         )
         mask[protected] = 0
+        trace = current_trace()
+        if trace:
+            trace.image("lama/effective_mask.png", mask)
         if not np.any(mask):
             return bgr.copy()
         size = tuple(self.opts["input_size_hw"][::-1])
@@ -157,7 +190,16 @@ class Inpainter:
                 None, None
             ],
         }
-        output = self.session.run(None, inputs)[0][0].transpose(1, 2, 0)
+        if trace:
+            trace.arrays(
+                "lama/inputs.npz",
+                image_bgr=inputs[self.session.get_inputs()[0].name],
+                mask=inputs[self.session.get_inputs()[1].name],
+            )
+        model_output = self.session.run(None, inputs)[0]
+        if trace:
+            trace.array("lama/output.npy", model_output)
+        output = model_output[0].transpose(1, 2, 0)
         output = np.clip(
             output * 255 if output.max() <= 1.1 else output, 0, 255
         ).astype(np.uint8)
@@ -213,10 +255,28 @@ class Perception:
             **({"object_boxes": boxes} if boxes is not None else {}),
         )
         self.masks = masks
+        trace = current_trace()
+        if trace:
+            for key, mask in masks.items():
+                trace.image(f"masks/{key}.png", mask.astype(np.uint8) * 255)
         depth = self.stereo.estimate(observation.frame) if object_keys else None
-        points = {
-            key: self.stereo.points_from_mask(depth, masks[key]) for key in object_keys
-        }
+        if trace:
+            if depth is not None:
+                trace.arrays(
+                    "stereo/depth.npz",
+                    disparity_px=depth.disparity_px,
+                    depth_m=depth.depth_m,
+                    valid_mask=depth.valid_mask,
+                )
+            trace.json(
+                "stereo/status.json",
+                {"computed": depth is not None, "localized_objects": list(object_keys)},
+            )
+        points = {}
+        for key in object_keys:
+            points[key] = self.stereo.points_from_mask(depth, masks[key])
+            if trace:
+                trace.arrays("stereo/object_points.npz", **points)
         self.diagnostics = {
             "localized_objects": list(object_keys),
             "valid_points": {k: len(v) for k, v in points.items()},
@@ -350,6 +410,11 @@ class Perception:
         bgr = cv2.cvtColor(frame.left_rgb, cv2.COLOR_RGB2BGR)
         protected = self.masks["obj1"] | self.masks["obj2"]
         mask = self.masks["arms"] & ~protected
+        trace = current_trace()
+        if trace:
+            trace.image("masks/protected_objects.png", protected.astype(np.uint8) * 255)
+            trace.image("masks/arms_to_erase.png", mask.astype(np.uint8) * 255)
+            trace.json("lama/status.json", {"requested": bool(mask.any())})
         if not mask.any():
             self.diagnostics["inpainting"] = "empty_mask"
             return bgr

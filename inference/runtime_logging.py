@@ -9,6 +9,8 @@ from lerobot.remote_inference.protocol import MessageType
 from lerobot.remote_inference.codec import decode_message
 from lerobot.transport import ZenohTransport
 
+from .diagnostics import RequestTrace, record_request, trace_path
+
 logger = logging.getLogger(__name__)
 _request = ContextVar("humanego_request", default="request=local")
 
@@ -25,6 +27,16 @@ def message_tag(message) -> str:
 
 
 class LoggedSessionWorker(SessionWorker):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        config = self.runner.policy.serving_config
+        directory = config.deployment.get("diagnostic_dir")
+        self.trace_root = (
+            f"{directory}/run_{time.time_ns()}_{self.instance_id}"
+            if directory and config.deployment.get("diagnostic_mode") == "full"
+            else None
+        )
+
     def submit(self, message):
         if message.message_type is MessageType.OBSERVATION:
             features = message.body.get("features")
@@ -51,7 +63,23 @@ class LoggedSessionWorker(SessionWorker):
         started = time.perf_counter()
         logger.info("inference_started %s", request_tag())
         try:
-            response = super()._execute(message)
+            root = getattr(self, "trace_root", None)
+            config = self.runner.policy.serving_config if root else None
+            with record_request(root, message, config) as trace:
+                response = super()._execute(message)
+                if trace:
+                    if response.message_type is MessageType.ACTION:
+                        trace.array(
+                            "output/returned_actions.npy",
+                            response.body["canonical_actions"],
+                        )
+                        trace.json(
+                            "output/runner_durations.json",
+                            response.body.get("server_durations", {}),
+                        )
+                    else:
+                        trace.status = "error_response"
+                        trace.json("output/error.json", response.body)
             if response.message_type is MessageType.ACTION:
                 logger.info(
                     "action_ready %s shape=%s elapsed_ms=%.1f",
@@ -72,17 +100,48 @@ class LoggedSessionWorker(SessionWorker):
 
 
 class LoggedZenohTransport(ZenohTransport):
+    def __init__(self, config, *, trace_root=None):
+        super().__init__(config)
+        self.trace_root = trace_root
+
     def publish(self, key, payload):
         response = decode_message(payload) if key.endswith("/act") else None
+        root = getattr(self, "trace_root", None)
+        trace = RequestTrace(trace_path(root, response)) if root and response else None
         try:
             super().publish(key, payload)
-        except Exception:
+        except Exception as exc:
+            if trace:
+                event = {
+                    "status": "failed",
+                    "error": str(exc),
+                    "time_ns": time.time_ns(),
+                }
+                trace.json(f"publications/{event['time_ns']}.json", event)
+                trace.json("publication.json", event)
             logger.exception(
                 "reply_publish_failed key=%s %s",
                 key,
                 message_tag(response) if response else "",
             )
             raise
+        if trace:
+            event = {
+                "status": "published",
+                "message_type": response.message_type.value,
+                "time_ns": time.time_ns(),
+                "bytes": len(payload),
+                "delivery_ack": False,
+                "server_durations": response.body.get("server_durations"),
+                "error_code": response.body.get("code"),
+                "error_message": response.body.get("message"),
+            }
+            trace.json(f"publications/{event['time_ns']}.json", event)
+            trace.json("publication.json", event)
+            if response.message_type is MessageType.ACTION:
+                trace.array(
+                    "output/published_actions.npy", response.body["canonical_actions"]
+                )
         if response is not None:
             if response.message_type is MessageType.ACTION:
                 logger.info(

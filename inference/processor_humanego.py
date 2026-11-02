@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 import time
 
-import cv2
 import numpy as np
 
 from lerobot.processor import ProcessorStep, ProcessorStepRegistry
@@ -18,6 +17,7 @@ from lerobot.processor import DeviceProcessorStep, RenameObservationsProcessorSt
 
 from .config import InferenceConfig, load_config, validate_runtime_config
 from .data_types import Observation, PreparedObservation, RobotState, StereoFrame
+from .diagnostics import RequestTrace, current_trace
 from .perception import Perception
 from .rendering import canvas_intrinsics, render_scene
 from .runtime_logging import request_tag
@@ -100,9 +100,16 @@ class HumanEgoProcessor:
             else self.perception.update_scene(observation, self.scene)
         )
         clean = self.perception.erase_arms(observation.frame)
+        trace = current_trace()
+        if trace:
+            trace.image("clean.png", clean)
         K = np.asarray(self.config.intrinsics["left"]["K"], np.float64)
         settings = self.config.perception["rendering"]
-        image = render_scene(clean, scene, K, settings)
+        rendering = {}
+        image = render_scene(clean, scene, K, settings, diagnostics=rendering)
+        hand_stats = rendering["hand"]
+        log = logger.warning if hand_stats["points_drawn"] == 0 else logger.info
+        log("gripper_projection %s stats=%s", request_tag(), hand_stats)
         self.scene = scene
         self.perception.diagnostics["processor_s"] = time.perf_counter() - start
         logger.info(
@@ -112,9 +119,44 @@ class HumanEgoProcessor:
         )
         folder = self.config.deployment.get("diagnostic_dir")
         if folder:
-            path = Path(folder)
-            path.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(path / f"{time.time_ns()}_model_canvas.png"), image)
+            projection = {
+                "request": request_tag(),
+                "T_left_rect_from_EE": observation.robot.T_ee_in_cam.tolist(),
+                "T_left_rect_from_hand": scene.hand_in_cam.tolist(),
+                "gripper": scene.gripper,
+                "canvas_hw": list(image.shape[:2]),
+                "K_canvas": canvas_intrinsics(
+                    K, canvas_hw=settings["canvas_hw"]
+                ).tolist(),
+                "rendering": rendering,
+            }
+            writer = trace if trace else RequestTrace(folder)
+            stamp = "render" if trace else time.time_ns()
+            writer.image(f"{stamp}_model_canvas.png", image)
+            writer.json(f"{stamp}_model_canvas.json", projection)
+        if trace:
+            trace.json(
+                "scene.json",
+                {
+                    "hand_in_cam": scene.hand_in_cam.tolist(),
+                    "reference_anchor": scene.reference_anchor.T_in_cam.tolist(),
+                    "latched_object": scene.latched_object,
+                    "T_object_in_hand": None
+                    if scene.T_object_in_hand is None
+                    else scene.T_object_in_hand.tolist(),
+                    "gripper": scene.gripper,
+                    "last_seen": scene.last_seen,
+                    "relocalization_started": scene.relocalization_started,
+                    "objects": {
+                        key: {
+                            "T_in_cam": obj.T_in_cam.tolist(),
+                            "kpts_local": obj.kpts_local.tolist(),
+                        }
+                        for key, obj in scene.objects.items()
+                    },
+                    "diagnostics": self.perception.diagnostics,
+                },
+            )
         return PreparedObservation(
             observation.frame,
             scene,

@@ -263,3 +263,58 @@ def test_event_masks_use_current_projection_without_depth_or_object_detection():
         "obj2",
     }
     p.stereo.estimate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "x,z,expected",
+    [(0, 0.8, "visible"), (10, 0.8, "outside_image"), (0, -0.2, "depth_clipped")],
+)
+def test_gripper_projection_reports_why_points_are_missing(x, z, expected):
+    p, _, _ = scene_perception()
+    scene = p.initialize_scene(observation())
+    scene.objects = {}
+    scene.hand_in_cam = pose(x=x, z=z)
+    diagnostics = {}
+    image = render_scene(
+        np.zeros((480, 640, 3), np.uint8), scene, p.stereo.K, diagnostics=diagnostics
+    )
+    hand = diagnostics["hand"]
+    assert hand["points_total"] == 24
+    if expected == "visible":
+        assert hand["points_drawn"] == 24
+        assert image.any()
+    else:
+        assert hand["points_drawn"] == 0
+        assert hand[expected] == 24
+        assert not image.any()
+
+
+def test_saved_canvas_keeps_pose_and_projection_diagnostics(tmp_path):
+    import json
+    from lerobot_policy_humanego.processor_humanego import HumanEgoProcessor
+
+    p, _, _ = scene_perception()
+    p.config.deployment["diagnostic_dir"] = str(tmp_path)
+    p.masks = {key: np.zeros((480, 640), bool) for key in ("obj1", "obj2", "arms")}
+    processor = HumanEgoProcessor(p.config, p)
+    obs = observation()
+    processor(obs)
+    paths = list(tmp_path.glob("*_model_canvas.json"))
+    assert len(paths) == 1
+    assert paths[0].with_suffix(".png").exists()
+    saved = json.loads(paths[0].read_text())
+    np.testing.assert_allclose(saved["T_left_rect_from_EE"], obs.robot.T_ee_in_cam)
+    assert saved["rendering"]["hand"]["points_drawn"] == 24
+    assert saved["canvas_hw"] == [1232, 1624]
+
+
+def test_canvas_disk_error_does_not_prevent_prepared_observation(tmp_path):
+    from lerobot_policy_humanego.processor_humanego import HumanEgoProcessor
+
+    p, _, _ = scene_perception()
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+    p.config.deployment["diagnostic_dir"] = str(blocked)
+    p.masks = {key: np.zeros((480, 640), bool) for key in ("obj1", "obj2", "arms")}
+    prepared = HumanEgoProcessor(p.config, p)(observation())
+    assert prepared.clean_bgr.shape == (1232, 1624, 3)

@@ -1,6 +1,7 @@
 """Official LeRobot serving lifecycle with HumanEgo per-request console logs."""
 
 import logging
+from pathlib import Path
 import signal
 
 from lerobot.configs import parser
@@ -34,7 +35,23 @@ def serve(cfg: ServerConfig) -> None:
         max_input_chars=cfg.language.max_input_chars,
         max_output_chars=cfg.language.max_output_chars,
     )
-    server = PolicyServer(worker, LoggedZenohTransport(cfg.zenoh))
+    server = PolicyServer(
+        worker, LoggedZenohTransport(cfg.zenoh, trace_root=worker.trace_root)
+    )
+    file_handler = None
+    if worker.trace_root:
+        try:
+            folder = Path(worker.trace_root)
+            folder.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(folder / "server.log")
+            file_handler.setLevel(cfg.log_level.upper())
+            file_handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+            )
+            logging.getLogger().addHandler(file_handler)
+            logger.info("full_diagnostics root=%s", folder)
+        except OSError:
+            logger.exception("diagnostic_log_failed root=%s", worker.trace_root)
     logger.info(
         "server_warmed deployment=%s execution_steps=%d action_hz=%.1f",
         cfg.deployment,
@@ -52,6 +69,9 @@ def serve(cfg: ServerConfig) -> None:
     finally:
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
+        if file_handler:
+            logging.getLogger().removeHandler(file_handler)
+            file_handler.close()
 
 
 def main() -> None:

@@ -73,6 +73,33 @@ python -m lerobot_policy_humanego.server --config_path /new/location/server.yaml
 
 启动预热标记为 `warmup_probe`，不计为收到客户端观测。原始 `lerobot-policy-server` 入口仍可使用，但不包含新增的收包、请求关联及发布日志。日志默认输出到终端，不保存完整图像或动作数组。
 
+## 详情诊断模式
+
+在部署包 `assets/params.yaml` 中配置，重启日志入口后生效：
+
+```yaml
+deployment:
+  diagnostic_dir: /home/huasan/HumanEgo/runs/inference-diagnostics
+  diagnostic_mode: full
+```
+
+`canvas` 为默认模式，只保存画布及投影 JSON；`full` 保存关键过程数据，目录为 `run_<时间>_<实例>/<session>/<generation>/<request>/`，预热后的文本日志保存到该 run 目录的 `server.log`。`diagnostic_dir: null` 关闭文件诊断。导出仍会清空诊断目录，须在实际部署包中显式设置。
+
+| 文件 | 数据 |
+| --- | --- |
+| `request.json`、`config.json` | 请求标识、采集时间、处理状态、异常及所用配置和标定 |
+| `input/` | 原始左右 RGB 图、完整实测 `state.npy` |
+| `detections/`、`masks/` | DINO 选框与分数、投影提示框、物体/机械臂/保护 mask |
+| `stereo/` | 实际计算时的视差、米制深度、有效 mask、物体三维点；稳定阶段跳过深度时明确记录 |
+| `lama/`、`clean.png` | 有修复时的有效 mask、512×512 LaMa 输入/输出及最终 clean 图；空 mask 会标记跳过 |
+| `scene.json`、`render_model_canvas.*` | 固定参考、物体与手位姿、抓取关联、渲染画布、投影范围及绘点/裁剪统计 |
+| `model/` | 实际 RGB 图与原始 `[1,3,240,320]` float32 tensor、ICT、bool mask、anchor UV、固定噪声、原策略输出和 done |
+| `output/` | 完整 50 步解码预测、runner 截取后的动作及实际发布动作、阶段耗时 |
+| `publication.json` | 最近一次发布的成功/失败、错误、字节数、时间及 `delivery_ack=false` |
+| `publications/*.json` | 每次发布事件，保留重复请求的错误回复历史 |
+
+处理中途失败保留已完成阶段的数据，不会补造未运行阶段文件；协议校验阶段即被拒绝的请求仅有错误发布记录和文本日志。NPY/NPZ 使用 `numpy.load(..., allow_pickle=False)` 读取。详情模式同步写图、压缩数组和复制 GPU 输入，会增加延迟和磁盘占用；结束排查后改回 `canvas` 或关闭目录。诊断写入失败会明确报日志，不改变策略结果。
+
 ## 客户端接口
 
 通信、观测与动作格式、坐标及 EE 约定见 [客户端适配接口](CLIENT_INTERFACE.md)。
@@ -112,7 +139,7 @@ python -m lerobot_policy_humanego.server --config_path /new/location/server.yaml
 
 DINO 与 SAM 默认分别使用 `segmentation.dino_precision: float16`、`sam_precision: float16` 的局部 autocast；原策略和 LaMa 保持 FP32。可设置 `float32` 回退，`bfloat16` 仅用于显式实验。旧部署包缺少这些配置时保持原 FP32/continuous 行为，需要重新导出才能启用优化。
 
-日志包含初始化、当前请求的 `localized_objects`、关键点数、mask 像素、阶段耗时和 done。`deployment.diagnostic_dir: null` 默认不逐帧写图；显式设置目录后才保存模型画布。
+日志包含初始化、当前请求的 `localized_objects`、关键点数、mask 像素、阶段耗时和 done。`gripper_projection` 输出夹爪绘点数、深度裁剪数、画外点数及投影范围；无可见点时为 WARNING。`deployment.diagnostic_dir: null` 默认不逐帧写图；显式设置目录后才保存模型画布及同名 JSON，包含接收的 EE 位姿、模型 hand 位姿、画布内参和绘制统计。
 
 ## 保留行为和边界
 

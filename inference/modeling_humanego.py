@@ -12,6 +12,7 @@ from lerobot.inference import ChunkPolicySpec, ExecutionMode
 from .config import load_config, validate_runtime_config
 from .configuration_humanego import HumanEgoConfig
 from .data_types import PreparedObservation
+from .diagnostics import current_trace
 from .policy import ICTPolicy
 from .runtime_logging import request_tag
 
@@ -122,8 +123,32 @@ class HumanEgoPolicy(PreTrainedPolicy):
         )
         h, w = prepared.clean_bgr.shape[:2]
         uv = self.policy.compute_anchor_uv(scene.objects["obj1"], prepared.K, w, h)
+        trace = current_trace()
+        if trace:
+            trace.array("model/image_rgb_float32.npy", x_rgb)
+            pixels = (
+                (x_rgb[0].detach().cpu().permute(1, 2, 0).numpy() * 255)
+                .round()
+                .astype(np.uint8)
+            )
+            trace.image("model/image_rgb.png", pixels, rgb=True)
+            trace.arrays(
+                "model/inputs.npz",
+                ict=ict,
+                ict_mask=mask,
+                anchor_uv=np.array([]) if uv is None else uv,
+                fixed_noise=self.policy.noise,
+            )
         prediction, done = self.policy.infer(x_rgb, ict, mask, uv)
         pos, rot, grasp = prediction["right"]
+        if trace:
+            trace.arrays(
+                "model/prediction.npz",
+                reference_position_normalized=pos,
+                reference_rotation6d=rot,
+                grasp=grasp,
+                done=done,
+            )
         poses = np.stack(
             [
                 self.policy.decode_ee_in_cam(p, r, scene.reference_anchor, self.T_align)
@@ -138,6 +163,8 @@ class HumanEgoPolicy(PreTrainedPolicy):
             ],
             axis=-1,
         )
+        if trace:
+            trace.array("output/predicted_ee_actions.npy", actions)
         if (
             actions.shape != (50, 10)
             or not np.isfinite(actions).all()

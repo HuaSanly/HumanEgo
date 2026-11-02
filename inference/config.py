@@ -91,6 +91,8 @@ def load_config(path: str | Path) -> InferenceConfig:
             raise ValueError(f"segmentation.{key} must be float32, float16 or bfloat16")
 
     deployment = dict(values["deployment"])
+    if deployment.get("diagnostic_mode", "canvas") not in ("canvas", "full"):
+        raise ValueError("deployment.diagnostic_mode must be canvas or full")
     if deployment.get("diagnostic_dir") is not None:
         deployment["diagnostic_dir"] = str(
             _resolve_path(deployment["diagnostic_dir"], source)

@@ -88,6 +88,7 @@ perception:
       - 0
 deployment:
   diagnostic_dir: null
+  diagnostic_mode: canvas  # full saves per-request process data when diagnostic_dir is set
   name: humanego-pick-cube-anchor
   mode: chunk
   action_fps: 30.0

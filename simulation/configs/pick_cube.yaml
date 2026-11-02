@@ -8,7 +8,7 @@ scene_only: false
 profile: production
 
 policy:
-  ckpt: ./runs/pick_cube/HumanEgo_anchor_clean/latest.pt
+  ckpt: ./runs/pick_cube/HumanEgo_anchor/latest.pt
   num_inference_steps: 20
   seed: 7
 
@@ -100,7 +100,7 @@ control:
   policy_period: 0.3
   max_episode_time: 40.0
   step_stride: 2
-  look_ahead_offset: 45
+  look_ahead_offset: 40
   max_history_len: 1
   alpha: 0.3
   alpha_rot: 0.0

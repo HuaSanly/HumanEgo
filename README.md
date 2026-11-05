@@ -67,6 +67,21 @@ python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.y
 
 运行 `pick_cube` 前，请检查 `simulation/configs/pick_cube.yaml` 中的 checkpoint 路径，并确保同目录包含 `config.json` 和 `dataset_stats.json`。视频和日志保存在 `simulation/runs/`。更多配置及网页回放见 [仿真文档](simulation/README.md)。
 
+### 实时仿真
+
+添加 `--realtime` 可在后台运行模型推理，同时继续执行已有轨迹；推理结果就绪后会更新轨迹。该模式自动打开 MuJoCo 窗口，需要图形桌面和可用显示器（macOS 使用 `mjpython` 代替 `python`）：
+
+```bash
+# 单轮实时仿真
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --realtime
+
+# 多轮实时评测：顺序运行，使用独立的输出目录
+python simulation/scripts/evaluate.py --config simulation/configs/pick_cube.yaml \
+  --n 1 --policy-seeds 0 --out pick_cube_realtime --realtime
+```
+
+实时模式的评测只支持单个 worker，结果会受到机器推理速度影响；默认同步模式会在推理期间暂停物理仿真，适合可复现评测。实时评测须使用新的输出目录，不能将同步评测续跑为实时模式；实时评测续跑时会自动恢复该模式。详见 [仿真文档](simulation/README.md#quick-start)。
+
 ### pick_cube 多轮测试
 
 使用已安装仿真依赖的环境，在不同物块、容器位置及模型推理噪声种子下批量测试：

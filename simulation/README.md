@@ -44,6 +44,43 @@ python simulation/scripts/run_episode.py --mode single --set control.alpha=0.3
 
 Headless rendering uses `MUJOCO_GL=egl` (set automatically).
 
+Add `--viewer` to `run_episode.py` or `evaluate.py` to open a native MuJoCo
+window as the physics runs. A graphical desktop and a working display are
+required. The viewer limits physics to at most real time; inference can make it
+slower. Close the window or press Ctrl-C to interrupt the run. Batch viewing
+runs trials sequentially and defaults to one worker; `--workers` must be 1.
+On macOS, launch the command with `mjpython` instead of `python`.
+
+```bash
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --viewer
+python simulation/scripts/evaluate.py --config simulation/configs/pick_cube.yaml \
+  --n 1 --policy-seeds 0 --out pick_cube_viewer --viewer
+```
+
+Use the separate `--realtime` mode for continuous motion during policy inference.
+It implies `--viewer` and uses one background model worker while the physics and
+controller keep executing the previous trajectory. Only one prediction job can
+be in flight. New predictions are applied when ready; elapsed controller steps
+are removed from the front of the plan, and completely expired plans are ignored.
+The arm holds its last target if its existing trajectory runs out. Initial scene
+setup/perception still completes before the control loop starts; observation
+rendering and input preparation remain on the physics thread.
+
+```bash
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --realtime
+python simulation/scripts/evaluate.py --config simulation/configs/pick_cube.yaml \
+  --n 1 --policy-seeds 0 --out pick_cube_realtime --realtime
+```
+
+The default synchronous mode pauses physics during model computation and remains
+the reproducible evaluation mode. Real-time runs depend on machine speed and
+may produce different outcomes. Batch configs freeze `execution_mode: realtime`
+and must use a separate output directory; a synchronous study cannot be resumed
+as real time. Resuming a real-time study restores its mode automatically. Episode
+metadata records the execution mode, and real-time policy logs include observation
+time (`t`), result application time (`applied_t`) and wall-clock latency
+(`latency_wall`). Single-episode default output names gain a `_realtime` suffix.
+
 ## pick_cube scene
 
 `configs/pick_cube.yaml` is the standalone configuration for a blue open plastic

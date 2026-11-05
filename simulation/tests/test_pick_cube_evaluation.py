@@ -180,6 +180,27 @@ def test_complete_resume_does_not_create_workers_or_rerun(tmp_path, inputs, monk
     context.assert_not_called()
 
 
+def test_realtime_cli_preparation_freezes_mode_and_rejects_mixed_resume(tmp_path, inputs):
+    cfg, _ = inputs
+    config = tmp_path / "task.yaml"
+    config.write_text(yaml.safe_dump(cfg))
+    realtime_root = tmp_path / "realtime_study"
+    command = [sys.executable, str(Path(SIM_ROOT) / "scripts/evaluate.py")]
+    prepared = subprocess.run([*command, "--config", str(config), "--n", "1", "--policy-seeds", "0",
+                               "--out", str(realtime_root), "--device", "cpu", "--prepare-only", "--realtime"],
+                              text=True, capture_output=True, timeout=30)
+    assert prepared.returncode == 0, prepared.stderr
+    frozen, _, _, _ = evaluation.load_study(realtime_root)
+    assert frozen["execution_mode"] == "realtime"
+    with pytest.raises(ValueError, match="workers 1"):
+        evaluation.run_study(realtime_root, workers=2, device="cpu")
+    sync_root, _, _ = prepare(tmp_path, inputs, n=1)
+    mixed = subprocess.run([*command, "--resume", "--out", str(sync_root), "--device", "cpu", "--realtime"],
+                           text=True, capture_output=True, timeout=30)
+    assert mixed.returncode == 2
+    assert "cannot resume a synchronous study" in mixed.stderr
+
+
 def test_explicit_error_retry_only_schedules_errors_and_incomplete_trials(tmp_path, inputs, monkeypatch):
     root, manifest, protocol = prepare(tmp_path, inputs)
     result(root, manifest, protocol, 0, "success")

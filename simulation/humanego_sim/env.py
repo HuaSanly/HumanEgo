@@ -82,6 +82,7 @@ class ServeBreadSim:
         self.dt = float(self.m.opt.timestep)
         self.rng = np.random.default_rng(seed)
         self.t = 0.0
+        self.viewer_update = None
 
         self.T_cam_in_world = np.array(self.meta["T_cam_in_world"])
         self.T_world_in_cam = np.linalg.inv(self.T_cam_in_world)
@@ -229,6 +230,8 @@ class ServeBreadSim:
             self.t += self.dt
             if self.obs_history is not None:
                 self.obs_history.append((self.t, self.d.qpos.copy()))
+            if self.viewer_update is not None:
+                self.viewer_update()
 
     # ------------------------------------------------------------- geometry
     def body_T_world(self, name: str) -> np.ndarray:

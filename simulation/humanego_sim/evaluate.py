@@ -22,7 +22,7 @@ from .stats import fmt_rate
 _W = {}
 
 
-def _worker_init(cfg_overrides: dict, device: str, intro: bool = False):
+def _worker_init(cfg_overrides: dict, device: str, intro: bool = False, viewer: bool = False):
     os.environ.setdefault("MUJOCO_GL", "egl")
     # one thread per worker: OpenCV / torch / BLAS thread pools oversubscribe the CPU otherwise
     import cv2
@@ -39,12 +39,14 @@ def _worker_init(cfg_overrides: dict, device: str, intro: bool = False):
     from .env import load_config
     from .runner import EpisodeRunner
     cfg = load_config(None, cfg_overrides)
+    viewer = viewer or cfg.get("execution_mode", "sync") == "realtime"
     _W["runner"] = EpisodeRunner(cfg, device=device)
     _W["cfg"] = cfg
     _W["cfg_overrides"] = cfg_overrides
     _W["device"] = device
     _W["var_key"] = ""
     _W["intro"] = intro
+    _W["viewer"] = viewer
 
 
 def variant_overrides(scene: Optional[dict], base_overrides: dict):
@@ -99,8 +101,10 @@ def _worker_run(job):
             _W["runner"], _W["var_key"] = apply_scene_variation(_W["runner"], scene, _W["cfg_overrides"],
                                                                 _W.get("var_key", ""), _W["device"])
             _W["var_used"] = True
-        r = _W["runner"].run(scene=scene, seed=seed, log_dir=log_dir, save_policy_images=log_dir is not None and log_images,
-                             verbose=False, intro=_W.get("intro", False))
+        from .viewer import show_simulation
+        with show_simulation(_W["runner"].env, _W.get("viewer", False)):
+            r = _W["runner"].run(scene=scene, seed=seed, log_dir=log_dir, save_policy_images=log_dir is not None and log_images,
+                                 verbose=False, intro=_W.get("intro", False))
         return {"idx": idx, "seed": seed, "scene": scene, "success": r.success, "per_side": r.per_side,
                 "duration": r.duration, "wall": r.wall_time, "metrics": r.metrics}
     except Exception as e:  # keep the batch alive, report the failure
@@ -111,11 +115,12 @@ def _worker_run(job):
 def evaluate(cfg_overrides: Optional[dict] = None, n_episodes: int = 16, workers: int = 6, seed: int = 0,
              scenes: Optional[List[dict]] = None, difficulty: float = 1.0, device: str = "cuda",
              log_root: Optional[str] = None, verbose: bool = True, intro: bool = False,
-             log_images: bool = True) -> Dict:
+             log_images: bool = True, viewer: bool = False) -> Dict:
     from .env import load_config
     from .sampling import sample_scene
     cfg_overrides = cfg_overrides or {}
     cfg = load_config(None, cfg_overrides)
+    viewer = viewer or cfg.get("execution_mode", "sync") == "realtime"
     rng = np.random.default_rng(seed)
     if scenes is None:
         scenes = [sample_scene(rng, cfg.get("mode", "bimanual"), difficulty) for _ in range(n_episodes)]
@@ -126,10 +131,20 @@ def evaluate(cfg_overrides: Optional[dict] = None, n_episodes: int = 16, workers
     t0 = time.time()
     for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         os.environ[k] = "1"           # inherited by the spawned workers
-    ctx = mp.get_context("spawn")
-    with ctx.Pool(processes=min(workers, len(jobs)), initializer=_worker_init,
-                  initargs=(cfg_overrides, device, intro)) as pool:
-        results = list(pool.imap_unordered(_worker_run, jobs))
+    if viewer:
+        if workers != 1:
+            raise ValueError("--viewer requires --workers 1")
+        _worker_init(cfg_overrides, device, intro, viewer=True)
+        try:
+            results = [_worker_run(job) for job in jobs]
+        finally:
+            if _W["runner"].env.renderer is not None:
+                _W["runner"].env.renderer.close()
+    else:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(processes=min(workers, len(jobs)), initializer=_worker_init,
+                      initargs=(cfg_overrides, device, intro)) as pool:
+            results = list(pool.imap_unordered(_worker_run, jobs))
     results.sort(key=lambda r: r["idx"])
     stats = summarize(results)
     stats["wall"] = time.time() - t0

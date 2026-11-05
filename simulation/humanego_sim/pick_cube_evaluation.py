@@ -210,8 +210,10 @@ def _run_trial(trial: dict) -> dict:
             STATE["runner"] = EpisodeRunner(STATE["cfg"], policy=STATE["policy"],
                                              device=STATE["device"], env=STATE["env"])
         env, runner = STATE["env"], STATE["runner"]
-        value = runner.run(scene=trial["scene"], seed=trial["env_seed"], policy_seed=trial["policy_seed"],
-                           log_dir=str(output), save_policy_images=False, record_hz=10, intro=False, verbose=False)
+        from .viewer import show_simulation
+        with show_simulation(env, STATE.get("viewer", False)):
+            value = runner.run(scene=trial["scene"], seed=trial["env_seed"], policy_seed=trial["policy_seed"],
+                               log_dir=str(output), save_policy_images=False, record_hz=10, intro=False, verbose=False)
         measured = dict(env.measurements)
         physical = {"both_pads": measured["both_pads"], "lifted": measured["max_lift_duration"] >= 0.2,
                     "secure_grasp": measured["max_secure_duration"] >= 0.1,
@@ -337,10 +339,13 @@ def render_videos(root: Path, cfg: dict, rows: list[dict], mode: str, indices: l
             env.renderer.close()
 
 
-def run_study(root: Path, workers: int, device: str, retry_errors: bool = False) -> dict:
+def run_study(root: Path, workers: int, device: str, retry_errors: bool = False, viewer: bool = False) -> dict:
     if workers < 1:
         raise ValueError("workers must be positive")
-    _, _, manifest, protocol = load_study(root)
+    cfg, _, manifest, protocol = load_study(root)
+    viewer = viewer or cfg.get("execution_mode", "sync") == "realtime"
+    if viewer and workers != 1:
+        raise ValueError("--viewer / real-time execution requires --workers 1")
     if device != protocol["device"]:
         raise ValueError("device changed; use a new output directory")
     results = read_results(root, manifest, protocol)
@@ -352,11 +357,21 @@ def run_study(root: Path, workers: int, device: str, retry_errors: bool = False)
         print(f"[pick_cube eval] planned={len(manifest['trials'])} remaining={len(jobs)} workers={workers}", flush=True)
         started = time.time()
         try:
-            with mp.get_context("spawn").Pool(min(workers, len(jobs)), initializer=_init_worker,
-                                               initargs=(str(root), device)) as pool:
-                for row in pool.imap_unordered(_run_trial, jobs):
+            if viewer:
+                _init_worker(str(root), device)
+                STATE["viewer"] = True
+                rows = map(_run_trial, jobs)
+                for row in rows:
                     print(f"[pick_cube eval] {row['trial']['trial_id']} {row['status']} "
                           f"reason={row['failure_reason']} wall={time.time()-started:.1f}s", flush=True)
+            else:
+                with mp.get_context("spawn").Pool(min(workers, len(jobs)), initializer=_init_worker,
+                                                   initargs=(str(root), device)) as pool:
+                    for row in pool.imap_unordered(_run_trial, jobs):
+                        print(f"[pick_cube eval] {row['trial']['trial_id']} {row['status']} "
+                              f"reason={row['failure_reason']} wall={time.time()-started:.1f}s", flush=True)
         finally:
+            if viewer and STATE.get("env") is not None and STATE["env"].renderer is not None:
+                STATE["env"].renderer.close()
             summarize(root, manifest, protocol)
     return summarize(root, manifest, protocol)

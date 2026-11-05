@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -33,6 +34,7 @@ from .driver import T_to_p
 from .env import REPO_ROOT, ServeBreadSim
 from .perception import SideObjects, SimPerception, mirror_pose, split_mask_by_x
 from .release_assist import ReleaseAssist
+from .realtime import RealtimeInference, remaining_plan
 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
@@ -91,6 +93,8 @@ class EpisodeRunner:
         if cfg.get("scene_only"):
             raise ValueError("This config is a scene preview; use scripts/run_episode.py --config <path> "
                              "to record physics without the serve_bread policy or success metric")
+        if cfg.get("execution_mode", "sync") not in ("sync", "realtime"):
+            raise ValueError("execution_mode must be sync or realtime")
         self.cfg = cfg
         self.task = cfg.get("task", "serve_bread")
         if self.task == "pick_cube" and cfg.get("mode") != "single":
@@ -342,7 +346,12 @@ class EpisodeRunner:
 
     # ------------------------------------------------------------------
     def _run_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
-        """Port of Inference._run_side for camera/anchor-frame absolute checkpoints."""
+        """Synchronous policy path, shared with the async observation/decode stages."""
+        request = self._prepare_side(ctx, clean_bg, t)
+        return self._finish_side(ctx, request, self.policy.infer(*request["inputs"]))
+
+    def _prepare_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
+        """Read simulator state on the physics thread and create detached inputs."""
         env, pol, arm = self.env, self.policy, self.env.arms[ctx.side]
         so, st = ctx.objs, ctx.hand
         reference_anchor = ctx.reference_anchor if pol.frame_mode == "anchor_frame" else None
@@ -410,7 +419,18 @@ class EpisodeRunner:
         active_K = self.perception.K_flip if ctx.is_flip else self.perception.K
         a_uv = pol.compute_anchor_uv(ObjectState(so.dynamic_obj_poses.get(self.anchor_key, so.T_anchor_in_cam_static)),
                                      active_K, env.W, env.H)
-        traj, done_prob = pol.infer(x_rgb, x_ict, mask, a_uv)
+        return {"inputs": (x_rgb, x_ict, mask, a_uv), "vis": vis, "t": t,
+                "Tv": Tv, "gv": gv, "reference_anchor": reference_anchor,
+                "grasping": st["is_grasping"], "latched": st["latched_obj"]}
+
+    def _finish_side(self, ctx: SideCtx, request: dict, result):
+        """Apply a completed prediction on the physics thread only."""
+        env, pol, arm = self.env, self.policy, self.env.arms[ctx.side]
+        st, hs = ctx.hand, pol.single_hand_side
+        x_rgb, x_ict, mask, a_uv = request["inputs"]
+        t, Tv, gv = request["t"], request["Tv"], request["gv"]
+        vis, reference_anchor = request["vis"], request["reference_anchor"]
+        traj, done_prob = result
         if self.trace is not None:
             p_, o_, g_ = traj[hs]
             self.trace["policy"].append({
@@ -491,6 +511,21 @@ class EpisodeRunner:
     def run(self, scene: Optional[dict] = None, seed: int = 0, log_dir: Optional[str] = None,
             record_hz: float = 30.0, save_policy_images: bool = True, verbose: bool = True,
             intro: bool = True, policy_seed: Optional[int] = None) -> EpisodeResult:
+        realtime = self.cfg.get("execution_mode", "sync") == "realtime"
+        if realtime and self.trace is not None:
+            raise ValueError("parity traces require synchronous execution")
+        if realtime:
+            # Large CPU thread pools can starve the physics/viewer thread, even
+            # when the network itself runs on CUDA.
+            torch.set_num_threads(1)
+            cv2.setNumThreads(1)
+        context = RealtimeInference(self.policy) if realtime else nullcontext(None)
+        with context as inference:
+            return self._run_episode(scene, seed, log_dir, record_hz, save_policy_images,
+                                     verbose, intro, policy_seed, inference)
+
+    def _run_episode(self, scene, seed, log_dir, record_hz, save_policy_images,
+                     verbose, intro, policy_seed, inference):
         wall0 = time.time()
         env, cc = self.env, self.cc
         env.rng = np.random.default_rng(seed)
@@ -563,8 +598,58 @@ class EpisodeRunner:
                 # poses), which mj_step leaves at the pre-step positions
                 tr["pre"].append(dict(self._prev_state, ctrl=env.d.ctrl.astype(float).tolist())
                                  if getattr(self, "_prev_state", None) else None)
-            # ---- deliver the previous inference, then observe again ----
-            if t >= next_pol - 1e-9:
+            # ---- real-time jobs never access MuJoCo or controller state ----
+            if inference is not None:
+                packet = inference.poll()
+                if packet is not None:
+                    requests, results, latency_wall = packet
+                    step_log = {"t": next(iter(requests.values()))["t"], "applied_t": t,
+                                "latency_wall": latency_wall, "sides": {}}
+                    all_rt, all_g = {}, {}
+                    for s, request in requests.items():
+                        ctx = ctxs[s]
+                        # A delayed prediction must not undo release/home sequencing.
+                        if controller.muted[s] or ctx.wrap_phase is not None:
+                            continue
+                        full_grasp = results[s][0][self.policy.single_hand_side][2]
+                        horizon = int(cc.get("exec_horizon", len(full_grasp)))
+                        _, usable_grasp = remaining_plan(full_grasp[:horizon], full_grasp[:horizon],
+                                                         t - request["t"], controller.control_freq,
+                                                         controller.step_stride)
+                        if not len(usable_grasp):
+                            # Do not let an expired done/grasp prediction change state.
+                            step_log["sides"][s] = {"traj_world": [], "grasp": [], "expired": True,
+                                                    "done": float(results[s][1]),
+                                                    "grasping": request["grasping"], "latched": request["latched"]}
+                            continue
+                        rt, g, vis, pW, dp = self._finish_side(ctx, request, results[s])
+                        rt, g = remaining_plan(rt, g, t - request["t"],
+                                               controller.control_freq, controller.step_stride)
+                        if rt:
+                            all_rt[s], all_g[s] = rt, g
+                        entry = {"traj_world": np.round(pW, 4).tolist(),
+                                 "grasp": np.round(np.asarray(full_grasp).ravel(), 3).tolist(),
+                                 "done": round(dp, 4), "grasping": request["grasping"],
+                                 "latched": request["latched"], "expired": not bool(rt)}
+                        if img_dir is not None:
+                            fn = f"{n_pol:04d}_{s}.jpg"
+                            cv2.imwrite(os.path.join(img_dir, fn), vis, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                            entry["image"] = fn
+                        step_log["sides"][s] = entry
+                    controller.update_target(all_rt, all_g)
+                    policy_log.append(step_log)
+                    n_pol += 1
+                if t >= next_pol - 1e-9 and not inference.busy and t < T_max:
+                    if len(sides) > 1 and t >= start_delay:
+                        ctxs["left"].is_active = True
+                    active = [s for s in ("right", "left") if s in ctxs
+                              and ctxs[s].is_active and ctxs[s].wrap_phase is None and not ctxs[s].is_done]
+                    if active:
+                        clean = self.perception.clean_background()
+                        inference.submit({s: self._prepare_side(ctxs[s], clean, t) for s in active})
+                    next_pol = t + P
+            # ---- synchronous evaluation keeps its original one-period delivery ----
+            if inference is None and t >= next_pol - 1e-9:
                 if pending is not None:
                     rt, grasp = pending
                     active = {s: chunk for s, chunk in rt.items() if not controller.muted[s]}
@@ -597,32 +682,32 @@ class EpisodeRunner:
                 policy_log.append(step_log)
                 n_pol += 1
                 next_pol += P
-                # ---- per-side wrap-up trigger ----
-                for s, ctx in ctxs.items():
-                    if ctx.is_active and ctx.is_done and ctx.wrap_phase is None:
-                        ctx.wrap_t0 = t
-                        controller.muted[s] = True
-                        controller.clear(s)
-                        arm = env.arms[s]
-                        arm.move_p(arm.get_p(), duration=0.05)      # halt
-                        rel = cc.get("release", {}) or {}
-                        if rel.get("place_down") and arm.gripper_cmd_closed() and geoms[s].get("place_z") is not None:
-                            # lower the bread onto the plate before opening (instead of dropping it)
-                            T = arm.T_base_in_world @ arm.get_T_ee_in_base()
-                            z_goal = geoms[s]["place_z"] + float(rel.get("margin", 0.012))
-                            if T[2, 3] > z_goal + 0.005:
-                                T[2, 3] = z_goal
-                                Tb = np.linalg.inv(arm.T_base_in_world) @ T
-                                arm.move_p(T_to_p(Tb), duration=float(rel.get("place_time", 0.9)),
-                                           safe_z_min=controller.safe_z_min)
-                                ctx.wrap_phase = "place"
-                        if ctx.wrap_phase is None and float(rel.get("settle", 0.0)) > 0:
-                            ctx.wrap_phase = "settle"            # hold still a moment before opening
-                        if ctx.wrap_phase is None:
-                            ctx.wrap_phase = "open"
-                            arm.open_gripper(goal_time=float(rel.get("open_time", 1.0)))
-                        if verbose:
-                            print(f"[sim] {s} done ({ctx.done_reason}) at t={t:.1f}s -> open + home")
+            # ---- per-side wrap-up trigger ----
+            for s, ctx in ctxs.items():
+                if ctx.is_active and ctx.is_done and ctx.wrap_phase is None:
+                    ctx.wrap_t0 = t
+                    controller.muted[s] = True
+                    controller.clear(s)
+                    arm = env.arms[s]
+                    arm.move_p(arm.get_p(), duration=0.05)      # halt
+                    rel = cc.get("release", {}) or {}
+                    if rel.get("place_down") and arm.gripper_cmd_closed() and geoms[s].get("place_z") is not None:
+                        # lower the bread onto the plate before opening (instead of dropping it)
+                        T = arm.T_base_in_world @ arm.get_T_ee_in_base()
+                        z_goal = geoms[s]["place_z"] + float(rel.get("margin", 0.012))
+                        if T[2, 3] > z_goal + 0.005:
+                            T[2, 3] = z_goal
+                            Tb = np.linalg.inv(arm.T_base_in_world) @ T
+                            arm.move_p(T_to_p(Tb), duration=float(rel.get("place_time", 0.9)),
+                                       safe_z_min=controller.safe_z_min)
+                            ctx.wrap_phase = "place"
+                    if ctx.wrap_phase is None and float(rel.get("settle", 0.0)) > 0:
+                        ctx.wrap_phase = "settle"            # hold still a moment before opening
+                    if ctx.wrap_phase is None:
+                        ctx.wrap_phase = "open"
+                        arm.open_gripper(goal_time=float(rel.get("open_time", 1.0)))
+                    if verbose:
+                        print(f"[sim] {s} done ({ctx.done_reason}) at t={t:.1f}s -> open + home")
             # ---- wrap-up sequencing (open -> home) ----
             for s, ctx in ctxs.items():
                 if ctx.wrap_phase in ("assist_open", "assist_settle"):
@@ -701,6 +786,8 @@ class EpisodeRunner:
                 frames.append(snap)
                 next_rec += rec_dt
             env.step()
+            if inference is not None and env.viewer_update is None:
+                inference.pace(env.dt)
             for s in sides:
                 bz = env.object_pos(self._manipulated_body(s))[2]
                 if bz > self._bread_max_z.get(s, 0.0):
@@ -715,6 +802,8 @@ class EpisodeRunner:
                         frames.append(snap)
                         next_rec += rec_dt
                     env.step()
+                    if inference is not None and env.viewer_update is None:
+                        inference.pace(env.dt)
                 break
 
         per_side = self.evaluate(ctxs)
@@ -729,6 +818,9 @@ class EpisodeRunner:
         res = EpisodeResult(success=success, per_side=per_side, duration=env.t, n_policy_steps=n_pol,
                             wall_time=time.time() - wall0, log_dir=log_dir,
                             metrics={"ik_fail": float(sum(controller.n_ik_fail.values()))})
+        if inference is not None:
+            res.metrics["realtime"] = 1.0
+            res.metrics["mean_policy_latency_wall"] = float(np.mean([p["latency_wall"] for p in policy_log])) if policy_log else 0.0
         if log_dir:
             self._save(log_dir, frames, policy_log, res, scene, side_objs)
         if verbose:
@@ -797,6 +889,7 @@ class EpisodeRunner:
         meta = dict(env.meta)
         meta["task"] = self.task
         meta["scene_only"] = False
+        meta["execution_mode"] = self.cfg.get("execution_mode", "sync")
         meta["policy"] = dict(self.cfg["policy"])
         meta["seeds"] = dict(self._episode_seeds)
         meta["scene_init"] = env.default_scene()

@@ -57,6 +57,8 @@ def evaluate_pick_cube(args, overrides):
     root = root.resolve()
     if args.resume or args.report_only:
         cfg, sampling, manifest, protocol = load_study(root, verify_runtime=not args.report_only)
+        if args.realtime and cfg.get("execution_mode", "sync") != "realtime":
+            raise ValueError("cannot resume a synchronous study with --realtime; choose a new --out")
         if args.set or args.sampling or args.trials or args.mode or args.robot or args.camera:
             raise ValueError("resume/report uses frozen config and trials; overrides require a new --out")
         if args.config and not args.report_only:
@@ -88,13 +90,17 @@ def evaluate_pick_cube(args, overrides):
         check_seed([manifest["scene_seed"]], args.final)
         protocol = prepare_study(root, cfg, sampling, manifest, args.device)
         cfg, _, _, _ = load_study(root)
+    realtime = cfg.get("execution_mode", "sync") == "realtime"
+    if realtime and args.workers not in (None, 1):
+        raise ValueError("real-time studies require --workers 1")
     check_seed([manifest["scene_seed"]], args.final)
     if any(index < 0 or index >= len(manifest["trials"]) for index in args.video_trials):
         raise ValueError("--video-trials indices are outside the trial list")
     if args.prepare_only or args.report_only:
         summary = summarize(root, manifest, protocol)
     else:
-        summary = run_study(root, args.workers if args.workers is not None else 1, args.device, args.retry_errors)
+        summary = run_study(root, args.workers if args.workers is not None else 1, args.device, args.retry_errors,
+                            viewer=args.viewer or realtime)
     rows = list(read_results(root, manifest, protocol).values())
     render_videos(root, cfg, rows, args.videos, args.video_trials)
     print(json.dumps({**{key: summary[key] for key in
@@ -108,6 +114,8 @@ def main():
     ap.add_argument("--config", default=None, help="task YAML; omit for the legacy serve_bread evaluator")
     ap.add_argument("--n", type=int, default=None, help="scene count; pick_cube trials = n × number of policy seeds")
     ap.add_argument("--workers", type=int, default=None)
+    ap.add_argument("--viewer", action="store_true", help="show a native MuJoCo window (requires --workers 1)")
+    ap.add_argument("--realtime", action="store_true", help="background policy inference; implies --viewer and --workers 1")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mode", default=None)
     ap.add_argument("--robot", default=None)
@@ -132,13 +140,25 @@ def main():
     ap.add_argument("--video-trials", type=int, nargs="*", default=[], help="trial indices to render from recorded physics")
     add_profile_arg(ap)
     args = ap.parse_args()
+    args.viewer = args.viewer or args.realtime
+    if args.viewer and args.workers not in (None, 1):
+        ap.error("--viewer requires --workers 1")
+    if args.viewer and not args.realtime and (args.prepare_only or args.report_only):
+        ap.error("--viewer requires running episodes, not --prepare-only or --report-only")
     ov = parse_sets(args.set)
+    if args.realtime:
+        ov["execution_mode"] = "realtime"
     ov.setdefault("profile", args.profile)
     for k in ("mode", "robot", "camera"):
         if getattr(args, k):
             ov[k] = getattr(args, k)
     from humanego_sim.env import load_config
-    if args.resume or args.report_only or load_config(args.config, ov).get("task") == "pick_cube":
+    cfg = load_config(args.config, ov) if not (args.resume or args.report_only) else None
+    if cfg and cfg.get("execution_mode", "sync") == "realtime":
+        args.viewer = True
+        if args.workers not in (None, 1):
+            ap.error("real-time studies require --workers 1")
+    if args.resume or args.report_only or cfg.get("task") == "pick_cube":
         try:
             return evaluate_pick_cube(args, ov)
         except (ValueError, FileNotFoundError) as error:
@@ -147,7 +167,7 @@ def main():
             or args.sampling or args.trials or args.retry_errors or args.video_trials or args.videos != "none"):
         ap.error("new evaluation options require --config simulation/configs/pick_cube.yaml")
     check_seed([args.seed], args.final)
-    n, workers = args.n if args.n is not None else 16, args.workers if args.workers is not None else 6
+    n, workers = args.n if args.n is not None else 16, args.workers if args.workers is not None else (1 if args.viewer else 6)
     log_root = os.path.join(os.path.dirname(HERE), "runs", args.log) if args.log else None
     scenes = None
     if args.variation:
@@ -155,7 +175,7 @@ def main():
         scenes = sample_scenes(n, args.seed, load_config(None, ov).get("mode", "bimanual"), args.difficulty,
                                variation=json.loads(args.variation))
     st = evaluate(ov, n_episodes=n, workers=workers, seed=args.seed, difficulty=args.difficulty,
-                  log_root=log_root, scenes=scenes, device=args.device)
+                  log_root=log_root, scenes=scenes, device=args.device, viewer=args.viewer)
     st.pop("results", None)
     print(json.dumps(st, indent=1))
     return 0

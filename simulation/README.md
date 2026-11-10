@@ -188,10 +188,10 @@ the head, wheels and left arm are fixed. Only the seven right-arm
 joints and coupled right gripper move. It inherits the original pick_cube
 checkpoint, policy camera, prop footprints, perception and grasp/release assistance.
 The table is 0.86 m high and the two props are repositioned to suit the right arm;
-the container is about 45 cm from the cube centre, with its original real-scene
+the container is about 44 cm from the cube centre, with its original real-scene
 reconstruction height restored to about 9.65 cm. The robot stays fixed and its
 head looks down at the task. The right arm starts bent with the gripper angled
-about 45 degrees from vertical; the cube is about 12 cm to the side of the TCP
+about 45 degrees from vertical; the cube is about 10 cm to the side of the TCP
 in the tabletop plane. `right/head_view` is a real camera attached to the
 centre eye; use `--camera_view right/head_view --video` to record that view.
 

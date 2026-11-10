@@ -93,8 +93,10 @@ ROBOTS: Dict[str, RobotSpec] = {
         arm_actuators=[f"ArmR{i:02d}_Joint" for i in range(2, 9)],
         gripper_actuator="gripper", gripper_open=0.0, gripper_closed=0.041,
         tool_site="tcp", R_tool_to_ee=np.eye(3),
-        initial_joints={"right": [0.49761, -0.55945, -0.91374, 0.40112, 0.06842, 0.09771, -0.96]},
-        home_joints=[0.49761, -0.55945, -0.91374, 0.40112, 0.06842, 0.09771, -0.96],
+        # Bent-arm ready pose: TCP at (0.34, -0.08, 0.30) m in the upright
+        # BRX scene, with the open fingers angled 45 degrees from vertical.
+        initial_joints={"right": [-0.01607, -0.80726, -0.68001, -0.2139, 0.17187, 0.29972, -0.06718]},
+        home_joints=[-0.01607, -0.80726, -0.68001, -0.2139, 0.17187, 0.29972, -0.06718],
         finger_bodies=["JawBlock01_Link", "JawBlock02_Link"],
         gripper_joint="JawBlock01_Joint", gripper_joint_open=0.0, gripper_joint_closed=0.041,
         gripper_reset_qpos={"JawBlock01_Joint": 0.0, "JawBlock02_Joint": 0.0},

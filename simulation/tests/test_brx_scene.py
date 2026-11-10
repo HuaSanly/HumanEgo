@@ -98,6 +98,10 @@ def test_only_right_arm_and_jaws_move_and_scene_stays_settled(env):
     np.testing.assert_allclose(env.body_T_world("right/base_link")[:3, 3], [-0.14639, 0.32001, -0.32104])
     np.testing.assert_allclose(env.body_T_world("right/base_link")[:3, :3], np.eye(3), atol=1e-10)
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "rail") == -1
+    ready = env.arms["right"].T_base_in_world @ env.arms["right"].get_T_ee_in_base()
+    tilt = np.rad2deg(np.arccos(np.clip(-ready[2, 2], -1, 1)))
+    assert 30 < tilt < 60
+    assert np.linalg.norm(ready[:2, 3] - env.object_pos("cube")[:2]) > 0.10
     before = env.d.qpos.copy()
     env.step(round(5 / env.dt))
     assert np.isfinite(env.d.qpos).all() and np.isfinite(env.d.qvel).all()

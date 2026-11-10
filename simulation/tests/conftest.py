@@ -30,10 +30,10 @@ def robot_available(name: str) -> bool:
     return os.path.exists(os.path.join(ASSETS, ROBOTS[name].xml))
 
 
-def robots_with_assets():
+def robots_with_assets(mode="bimanual"):
     """Trossen ships with the repo; Franka / UR5e appear after scripts/fetch_robots.py."""
     return [pytest.param(n, marks=pytest.mark.skipif(not robot_available(n), reason=f"{n} assets not fetched"))
-            for n in ROBOTS]
+            for n, robot in ROBOTS.items() if mode in robot.supported_modes]
 
 
 @pytest.fixture(scope="session")

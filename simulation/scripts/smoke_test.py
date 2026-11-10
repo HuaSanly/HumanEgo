@@ -22,6 +22,9 @@ def main():
     policy = None
     ok = True
     for name, r in ROBOTS.items():
+        if "bimanual" not in r.supported_modes:
+            print(f"[skip] {name}: use its task config (simulation/configs/pick_cube_brx.yaml)")
+            continue
         if not os.path.exists(os.path.join(ASSETS, r.xml)):
             print(f"[skip] {name}: assets not fetched (python simulation/scripts/fetch_robots.py {name})")
             continue

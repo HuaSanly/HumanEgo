@@ -11,6 +11,9 @@ autotune_*.log
 humanego_sim/assets/robots/franka_panda/
 humanego_sim/assets/robots/ur5e/
 humanego_sim/assets/robots/robotiq_2f85/
+# Local BRX CAD export; regenerate with scripts/import_brx.py.
+humanego_sim/assets/robots/brx20260825/
+humanego_sim/assets/pick_cube_*.xml
 # web build outputs (scripts/build_web.py); deployed to humanego-ai.github.io/sim
 web/data/
 web/assets/objects/

@@ -180,6 +180,39 @@ the policy. Physics-only previews can also be built with
 `build_web.py --config simulation/configs/pick_cube.yaml --set scene_only=true`.
 Those retain the **Live physics** prop editor and may use either arm mode.
 
+## BRX whole-body robot, right-arm pick_cube
+
+`configs/pick_cube_brx.yaml` adds the BRX 20260825 robot to the existing task.
+Its base, torso, head, wheels and left arm are fixed; only the seven right-arm
+joints and coupled right gripper move. It inherits the original pick_cube
+checkpoint, policy camera, prop poses, perception and grasp/release assistance.
+The robot has an independent floor-mounted world pose; the rear table edge is
+shortened to clear its torso, and the recording camera shows the whole robot.
+
+```bash
+conda activate GlassEgo  # or another environment with simulation/requirements.txt
+python simulation/scripts/import_brx.py --source /home/huasan/BRX20260825
+
+# Inspect physics without loading policy weights.
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube_brx.yaml \
+  --set scene_only=true --viewer --duration 5
+
+# Run the original trained policy, with the existing native viewer / realtime support.
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube_brx.yaml --viewer
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube_brx.yaml \
+  --seed 0 --video --out brx_pick_cube
+
+python -m pytest simulation/tests/test_brx_scene.py -q
+```
+
+The import preserves the source URDF and copies its meshes to local, ignored
+assets. Repeat it after changing the import script; other machines need their
+own copy of the BRX export. `--robot brx20260825` alone does not supply its floor
+pose: use the dedicated config. Bimanual mode is deliberately rejected so the
+whole robot cannot accidentally be instantiated twice. See
+[`docs/brx20260825.md`](docs/brx20260825.md) for geometry, physics assumptions,
+web export and validation details.
+
 ## Results
 
 ### Reproducible pick_cube batch evaluation

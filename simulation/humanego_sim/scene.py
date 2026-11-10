@@ -73,6 +73,21 @@ def rig_geometry(cfg: dict, sides: List[str]) -> RigGeometry:
                             [0, -np.cos(pitch), -np.sin(pitch)]]
         T_cam[:3, 3] = view["position"]
         Tbc = {s: np.linalg.inv(T_cam) @ T_base[s] for s in T_base}
+    if rig.get("base_pose"):
+        # Floor-mounted robots have an explicit world pose, independent of the
+        # camera calibration used by the original table-mounted arms.
+        for side in sides:
+            pose = rig["base_pose"].get(side)
+            if pose is None:
+                raise ValueError(f"rig.base_pose is missing {side}")
+            position = np.asarray(pose["position"], dtype=float)
+            angles = np.asarray(pose.get("rpy_deg", [0, 0, 0]), dtype=float)
+            if position.shape != (3,) or angles.shape != (3,) or not np.isfinite(np.r_[position, angles]).all():
+                raise ValueError(f"rig.base_pose.{side} requires finite position and rpy_deg triples")
+            T_base[side] = np.eye(4)
+            T_base[side][:3, :3] = R.from_euler("xyz", angles, degrees=True).as_matrix()
+            T_base[side][:3, 3] = position
+            Tbc[side] = np.linalg.inv(T_cam) @ T_base[side]
     return RigGeometry(T_cam_in_world=T_cam, T_base_in_world={s: T_base[s] for s in sides},
                        T_base_in_cam={s: Tbc[s] for s in sides})
 
@@ -190,6 +205,8 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     task = cfg.get("task", "serve_bread")
     pick_cube = task == "pick_cube"
     mode = cfg.get("mode", "bimanual")
+    if mode not in robot.supported_modes:
+        raise ValueError(f"{robot.label} supports modes {robot.supported_modes}, got {mode!r}")
     sides = ["right", "left"] if mode == "bimanual" else ["right"]
     phys = cfg.get("physics", {})
     geo = rig_geometry(cfg, sides)
@@ -380,17 +397,18 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     base_z = float(geo.T_base_in_world["right"][2, 3])
     base_x = float(geo.T_base_in_world["right"][0, 3])
     cam_p = geo.T_cam_in_world[:3, 3]
-    rail_x = cam_p[0] + 0.02
-    rail_y = max(max(abs(geo.T_base_in_world[s][1, 3]) for s in sides) + 0.10, 0.42)
-    rail_z = base_z - 0.035
-    _add_box(rig, "rail", [0.02, rail_y, 0.02], [rail_x, 0.0, rail_z], material="frame_black")
-    for s in sides:
-        by = float(geo.T_base_in_world[s][1, 3])
-        _add_box(rig, f"bracket_{s}", [(base_x - rail_x) / 2 + 0.03, 0.045, 0.006],
-                 [(base_x + rail_x) / 2, by, base_z - 0.006], material="frame_black")
-    for i, yy in enumerate((rail_y - 0.02, -rail_y + 0.02)):
-        _add_box(rig, f"post{i}", [0.02, 0.02, (rail_z - 0.02) / 2], [rail_x, yy, (rail_z - 0.02) / 2],
-                 material="frame_black")
+    if cfg["rig"].get("arm_mount", True):
+        rail_x = cam_p[0] + 0.02
+        rail_y = max(max(abs(geo.T_base_in_world[s][1, 3]) for s in sides) + 0.10, 0.42)
+        rail_z = base_z - 0.035
+        _add_box(rig, "rail", [0.02, rail_y, 0.02], [rail_x, 0.0, rail_z], material="frame_black")
+        for s in sides:
+            by = float(geo.T_base_in_world[s][1, 3])
+            _add_box(rig, f"bracket_{s}", [(base_x - rail_x) / 2 + 0.03, 0.045, 0.006],
+                     [(base_x + rail_x) / 2, by, base_z - 0.006], material="frame_black")
+        for i, yy in enumerate((rail_y - 0.02, -rail_y + 0.02)):
+            _add_box(rig, f"post{i}", [0.02, 0.02, (rail_z - 0.02) / 2], [rail_x, yy, (rail_z - 0.02) / 2],
+                     material="frame_black")
     mast_h = cam_p[2] + 0.05
     _add_box(rig, "mast", [0.015, 0.015, mast_h / 2], [cam_p[0] - 0.045, 0.0, mast_h / 2], material="frame_black")
     _add_box(rig, "cam_arm", [0.03, 0.012, 0.01], [cam_p[0] - 0.02, 0.0, cam_p[2] + 0.03], material="frame_black")
@@ -418,6 +436,8 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     for name, pos, look in [("front_view", *front),
                             ("side_view", *side),
                             ("top_view", [0.50, 0.0, 1.35], [0.45, 0.0, 0.0])]:
+        view = cfg["rig"].get("view_cameras", {}).get(name, {})
+        pos, look = view.get("position", pos), view.get("look_at", look)
         cc = wb.add_camera()
         cc.name = name
         pos = np.array(pos)
@@ -430,7 +450,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         up = np.cross(right, fwd)
         cc.pos = list(pos)
         cc.quat = _quat_wxyz(np.stack([right, up, -fwd], 1))
-        cc.fovy = 40.0
+        cc.fovy = float(view.get("fovy", 40.0))
 
     # ---------------- arms ----------------
     for s in sides:

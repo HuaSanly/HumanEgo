@@ -34,7 +34,7 @@ def main(names):
     for n in names:
         f = ROBOTS[n].fetch
         if not f:
-            print(f"{n}: shipped with the repo")
+            print(f"{n}: {ROBOTS[n].setup_command or 'shipped with the repo'}")
             continue
         jobs.append((os.path.dirname(ROBOTS[n].xml).split("/")[-1], f))
         for ex in f.get("extra", []):

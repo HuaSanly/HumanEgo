@@ -1,0 +1,24 @@
+# BRX 整机固定在地面，仅右臂和右夹爪参与原 pick_cube 任务。
+base_config: pick_cube.yaml
+robot: brx20260825
+mode: single
+rig:
+  base_pose:
+    right:
+      position: [-0.14639, 0.32001, -0.32104]
+      rpy_deg: [0, 0, -6.0413]
+  arm_mount: false
+  table:
+    # 收短靠机器人一侧的桌沿，给落地底盘和躯干留出空间；任务物体位置不变。
+    x_min: 0.19
+  view_cameras:
+    front_view:
+      position: [0.88, -1.85, 0.95]
+      look_at: [0.05, 0.05, -0.05]
+      fovy: 48
+physics:
+  robot_gripper:
+    brx20260825:
+      force: 35.0
+control:
+  safe_z_min: 0.30

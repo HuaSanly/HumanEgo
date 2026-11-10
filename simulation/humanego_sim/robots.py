@@ -68,6 +68,8 @@ class RobotSpec:
     attach: List[dict] = field(default_factory=list)   # sub-models attached to a site, e.g. a gripper
     tool_site_spec: Optional[dict] = None   # {"body":..., "pos":[...]} adds the tool site if the MJCF has none
     fetch: Optional[dict] = None        # where to download the assets from (scripts/fetch_robots.py)
+    supported_modes: tuple = ("single", "bimanual")
+    setup_command: str = ""            # local model import, when not supplied by Menagerie
 
 
 # Real Trossen driver: T_new = T_raw @ C  with  X_new=Y_raw, Y_new=Z_raw, Z_new=X_raw
@@ -84,6 +86,22 @@ _SPREAD_Y = np.array([[0.0, -1.0, 0.0],
                       [0.0, 0.0, 1.0]])
 
 ROBOTS: Dict[str, RobotSpec] = {
+    "brx20260825": RobotSpec(
+        name="brx20260825", label="BRX 20260825 (right arm)",
+        xml="robots/brx20260825/brx.xml", root_body="base_link",
+        arm_joints=[f"ArmR{i:02d}_Joint" for i in range(2, 9)],
+        arm_actuators=[f"ArmR{i:02d}_Joint" for i in range(2, 9)],
+        gripper_actuator="gripper", gripper_open=0.0, gripper_closed=0.041,
+        tool_site="tcp", R_tool_to_ee=np.eye(3),
+        initial_joints={"right": [-0.40856, -0.96783, -0.36714, 0.23111, 0.30946, -0.39722, 0.23402]},
+        home_joints=[-0.40856, -0.96783, -0.36714, 0.23111, 0.30946, -0.39722, 0.23402],
+        finger_bodies=["JawBlock01_Link", "JawBlock02_Link"],
+        gripper_joint="JawBlock01_Joint", gripper_joint_open=0.0, gripper_joint_closed=0.041,
+        gripper_reset_qpos={"JawBlock01_Joint": 0.0, "JawBlock02_Joint": 0.0},
+        gripper_force=35.0, gripper_force_param=True, max_opening=0.082,
+        kp_scale=1.0, reach=0.70, supported_modes=("single",),
+        setup_command="python simulation/scripts/import_brx.py --source ~/BRX20260825",
+    ),
     "trossen_wxai": RobotSpec(
         name="trossen_wxai",
         label="Trossen WidowX AI",
@@ -184,7 +202,8 @@ def get_robot(name: str) -> RobotSpec:
         raise KeyError(f"unknown robot '{name}'. Available: {list(ROBOTS)}")
     r = ROBOTS[name]
     if not os.path.exists(os.path.join(ASSETS, r.xml)):
-        raise FileNotFoundError(f"{r.label} assets missing: run `python simulation/scripts/fetch_robots.py {name}`")
+        command = r.setup_command or f"python simulation/scripts/fetch_robots.py {name}"
+        raise FileNotFoundError(f"{r.label} assets missing: run `{command}`")
     # start poses for robots without real-rig values: IK-matched to the Trossen start pose
     if not r.initial_joints:
         import json

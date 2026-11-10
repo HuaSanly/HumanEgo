@@ -15,11 +15,14 @@ from humanego_sim.scene import build_scene, rig_geometry
 CONFIG = str(Path(SIM_ROOT) / "configs" / "pick_cube_brx.yaml")
 
 
-def test_brx_keeps_the_original_task_and_camera():
+def test_brx_keeps_the_original_policy_camera_and_prop_geometry():
     base = load_config(str(Path(SIM_ROOT) / "configs" / "pick_cube.yaml"))
     cfg = load_config(CONFIG)
-    for key in ("scene", "appearance", "perception", "policy", "camera", "camera_intrinsics"):
+    for key in ("appearance", "perception", "policy", "camera", "camera_intrinsics"):
         assert cfg[key] == base[key]
+    for name, obj in base["scene"]["objects"].items():
+        assert {k: v for k, v in cfg["scene"]["objects"][name].items() if k != "pose"} == {
+            k: v for k, v in obj.items() if k != "pose"}
     assert cfg["mode"] == "single" and cfg["robot"] == "brx20260825"
     assert not cfg["rig"]["arm_mount"]
     original = rig_geometry(base, ["right"])
@@ -44,6 +47,31 @@ def test_invalid_base_pose_fails_before_building(position):
         rig_geometry(cfg, ["right"])
 
 
+@pytest.mark.parametrize("surface", [0.0, 0.10, -0.10])
+def test_perceived_grasp_height_is_relative_to_the_table(surface):
+    from types import SimpleNamespace
+    from humanego_sim.runner import EpisodeRunner
+    from humanego_sim.perception import SimPerception
+
+    runner = EpisodeRunner.__new__(EpisodeRunner)
+    runner.cfg = load_config(CONFIG)
+    runner.cc, runner.task = runner.cfg["control"], "pick_cube"
+    runner.env = SimpleNamespace(T_cam_in_world=np.eye(4), meta={"table_surface_z": surface})
+    size = runner.cfg["scene"]["objects"]["cube"]["size"][2]
+    top = surface + size
+    points = np.array([[0.3, 0, top], [0.33, 0, top], [0.3, 0.03, top], [0.33, 0.03, top]])
+    sensed = SimpleNamespace(objs_meta={"obj2": {"T_obj_in_cam_static": np.eye(4), "kpts_local": points}})
+    geometry = runner._perceived_geometry("right", sensed)
+    assert geometry["bread"]["c"][2] == pytest.approx(surface + size / 2)
+    perception = SimPerception.__new__(SimPerception)
+    perception.env = runner.env
+    near_table = np.array([0.3, 0.0, surface + 0.002])
+    above_table = np.array([0.3, 0.0, surface + 0.020])
+    filtered = perception._reject_off_object([near_table, above_table], margin=0.005)
+    assert filtered[0] is None
+    np.testing.assert_allclose(filtered[1], above_table)
+
+
 @pytest.fixture
 def env():
     if not (Path(ASSETS) / ROBOTS["brx20260825"].xml).is_file():
@@ -62,6 +90,8 @@ def test_only_right_arm_and_jaws_move_and_scene_stays_settled(env):
         "cube_free", "container_free"}
     assert model.body("right/ArmL08_Link").id > 0
     assert model.body("right/base_link").id > 0
+    np.testing.assert_allclose(env.body_T_world("right/base_link")[:3, 3], [-0.14639, 0.32001, -0.32104])
+    np.testing.assert_allclose(env.body_T_world("right/base_link")[:3, :3], np.eye(3), atol=1e-10)
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "rail") == -1
     before = env.d.qpos.copy()
     env.step(round(5 / env.dt))
@@ -69,17 +99,53 @@ def test_only_right_arm_and_jaws_move_and_scene_stays_settled(env):
     np.testing.assert_allclose(env.arms["right"].get_j(), before[env.arms["right"].qadr], atol=1e-4)
     for name in env.obj_names:
         np.testing.assert_allclose(env.object_pos(name)[:2], env.cfg["scene"]["objects"][name]["pose"][:2], atol=0.002)
+        assert env.object_lowest_z(name) == pytest.approx(env.meta["table_surface_z"], abs=0.002)
+    assert model.geom_pos[model.geom("floor").id, 2] == -0.76
+    assert env.body_T_world("table")[2, 3] == pytest.approx(0.10)
     for contact in env.d.contact[:env.d.ncon]:
         bodies = [model.body(int(model.geom_bodyid[g])).name for g in contact.geom]
         if any(name.startswith("right/") for name in bodies):
             assert contact.dist > -0.001, bodies
 
 
+def test_fixed_torso_remains_vertical(env):
+    bodies = [env.m.body("right/" + name).id for name in
+              ("FoldingModularJoint02_Link", "FoldingModularJoint03_Link", "Trunk_Link")]
+    for lower, upper in zip(bodies, bodies[1:]):
+        delta = env.d.xpos[upper] - env.d.xpos[lower]
+        np.testing.assert_allclose(delta, [0, 0, 0.3], atol=3e-6)
+    # The trunk's local -Y is vertical in the original upright CAD pose.
+    rotation = env.d.xmat[bodies[-1]].reshape(3, 3)
+    np.testing.assert_allclose(rotation @ [0, -1, 0], [0, 0, 1], atol=1e-5)
+
+
+def test_raised_table_layout_and_browser_reset_share_height(env, tmp_path):
+    import json
+    import yaml
+    from humanego_sim.live_export import export_live
+    from humanego_sim.pick_cube_sampling import layout_reason
+
+    with open(Path(SIM_ROOT) / "configs" / "eval_pick_cube.yaml") as file:
+        sampling = yaml.safe_load(file)
+    assert layout_reason(env.default_scene(), env.cfg, sampling) == ""
+    folder = Path(export_live(env, str(tmp_path), "brx_raised_table"))
+    spec = json.loads((folder / "spec.json").read_text())
+    assert spec["table_surface_z"] == pytest.approx(0.10)
+    model = mujoco.MjModel.from_xml_path(str(folder / "scene.xml"))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    for name, obj in env.cfg["scene"]["objects"].items():
+        # MJCF serializes positions to six decimal places.
+        assert data.xpos[model.body(name).id, 2] == pytest.approx(0.10 + obj["size"][2] / 2 + 0.0008, abs=1e-6)
+
+
 def test_brx_camera_pose_and_ik_follow_the_actual_tcp(env):
     arm = env.arms["right"]
     world = env.T_cam_in_world @ arm.get_T_ee_in_cam()
     np.testing.assert_allclose(world, arm.T_base_in_world @ arm.get_T_ee_in_base(), atol=1e-10)
-    for xyz in ([0.4, -0.3, 0.017], [0.4, -0.3, 0.12], [0.292460543, 0.109612, 0.14]):
+    cube, container = env.object_pos("cube"), env.object_pos("container")
+    surface = env.meta["table_surface_z"]
+    for xyz in (cube, [*cube[:2], surface + 0.12], [*container[:2], surface + 0.12]):
         target = np.eye(4)
         target[:3, :3] = Rotation.from_euler("xyz", [180, 0, 180], degrees=True).as_matrix()
         target[:3, 3] = xyz
@@ -121,14 +187,23 @@ def test_brx_lifts_with_both_pads_and_releases_inside_container(env):
     arm = env.arms["right"]
     cube = env.object_pos("cube").copy()
     container = env.object_pos("container").copy()
+    surface = env.meta["table_surface_z"]
 
     def move(xyz):
         target = np.eye(4)
         target[:3, :3] = Rotation.from_euler("xyz", [180, 0, 180], degrees=True).as_matrix()
         target[:3, 3] = xyz
-        assert arm.move_p(T_to_p(arm.T_world_in_base @ target), duration=2,
-                          safe_z_min=env.cfg["control"]["safe_z_min"])
-        env.step(round(2.3 / env.dt))
+        start = (arm.T_base_in_world @ arm.get_T_ee_in_base())[:3, 3]
+        # Short Cartesian commands keep IK on a continuous branch while the
+        # upright seven-axis arm crosses the workspace, as in closed-loop control.
+        steps = max(1, int(np.ceil(np.linalg.norm(target[:3, 3] - start) / 0.02)))
+        for fraction in np.linspace(1 / steps, 1, steps):
+            waypoint = target.copy()
+            waypoint[:3, 3] = start + fraction * (target[:3, 3] - start)
+            assert arm.move_p(T_to_p(arm.T_world_in_base @ waypoint), duration=2 / steps,
+                              safe_z_min=env.cfg["control"]["safe_z_min"])
+            env.step(round(2 / steps / env.dt))
+        env.step(round(0.3 / env.dt))
         actual = arm.T_base_in_world @ arm.get_T_ee_in_base()
         assert np.linalg.norm(actual[:3, 3] - target[:3, 3]) < 0.002
         assert Rotation.from_matrix(target[:3, :3] @ actual[:3, :3].T).magnitude() < 0.01
@@ -150,13 +225,13 @@ def test_brx_lifts_with_both_pads_and_releases_inside_container(env):
     arm.close_gripper(goal_time=0.5)
     env.step(round(1 / env.dt))
     assert np.all(pad_forces() > 0.1)
-    move([cube[0], cube[1], 0.10])
+    move([cube[0], cube[1], surface + 0.10])
     assert env.object_pos("cube")[2] - cube[2] > 0.025
     assert np.all(pad_forces() > 0.1)
-    move([cube[0], cube[1], 0.12])
-    move([0.36, -0.13, 0.12])
-    # Any safe point in the cavity is a valid drop; avoid the robot's trunk.
-    move([container[0] + 0.02, container[1] - 0.04, 0.12])
+    move([cube[0], cube[1], surface + 0.12])
+    midpoint = (cube[:2] + container[:2]) / 2
+    move([*midpoint, surface + 0.12])
+    move([*container[:2], surface + 0.12])
     arm.open_gripper(goal_time=0.5)
     env.step(round(1.5 / env.dt))
     runner = EpisodeRunner.__new__(EpisodeRunner)

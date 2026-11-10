@@ -181,6 +181,7 @@ class ServeBreadSim:
             z = 0.0005
         else:
             z = self.meta["objects"][name]["extents"][2] / 2 + 0.0008
+        z += self.meta.get("table_surface_z", 0.0)
         self.place_object(name, [x, y, z] + list(yaw_quat(yaw_deg)))
 
     def object_role_masks(self, masks: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:

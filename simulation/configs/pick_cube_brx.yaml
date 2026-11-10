@@ -1,24 +1,32 @@
-# BRX 整机固定在地面，仅右臂和右夹爪参与原 pick_cube 任务。
+# BRX 躯干保持竖直，整机固定在地面，仅右臂和右夹爪参与原 pick_cube 任务。
 base_config: pick_cube.yaml
 robot: brx20260825
 mode: single
 rig:
   base_pose:
     right:
+      # 保留首次 BRX 场景的底盘位置，朝世界 +X 正前方，不通过移动机器人适配任务。
       position: [-0.14639, 0.32001, -0.32104]
-      rpy_deg: [0, 0, -6.0413]
+      rpy_deg: [0, 0, 0]
   arm_mount: false
   table:
-    # 收短靠机器人一侧的桌沿，给落地底盘和躯干留出空间；任务物体位置不变。
+    # 桌面高 0.86 m；地面及机器人不动，桌面和物体相对原场景升高 0.10 m。
+    height: 0.86
     x_min: 0.19
   view_cameras:
     front_view:
       position: [0.88, -1.85, 0.95]
-      look_at: [0.05, 0.05, -0.05]
+      look_at: [0.10, 0.10, 0.05]
       fovy: 48
 physics:
   robot_gripper:
     brx20260825:
       force: 35.0
 control:
-  safe_z_min: 0.30
+  safe_z_min: 0.40
+scene:
+  objects:
+    cube:
+      pose: [0.34, -0.095, 0.0]
+    container:
+      pose: [0.40626, 0.08, 0.0]

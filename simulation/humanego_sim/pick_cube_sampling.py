@@ -8,7 +8,7 @@ import numpy as np
 
 from .cameras import get_camera
 from .robots import get_robot
-from .scene import rig_geometry
+from .scene import rig_geometry, table_surface_z
 
 
 def _corners(obj: dict, pose: list) -> np.ndarray:
@@ -34,6 +34,7 @@ def layout_reason(scene: dict, cfg: dict, sampling: dict) -> str:
     points = {}
     for name in ("cube", "container"):
         corners = _corners(cfg["scene"]["objects"][name], scene[name])
+        corners[:, 2] += table_surface_z(cfg)
         points[name] = corners
         if (corners[:, 0].min() < table["x_min"] + margin
                 or corners[:, 0].max() > table["x_max"] - margin

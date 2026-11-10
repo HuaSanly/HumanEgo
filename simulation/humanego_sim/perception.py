@@ -269,13 +269,14 @@ class SimPerception:
         """Drop lifted keypoints that sit on (or below) the table plane known from the calibration: a
         bread keypoint lifted that low took its depth from the table, not the bread."""
         Tcw = self.env.T_cam_in_world        # calibration (the robot's belief), not the true camera
+        surface_z = getattr(self.env, "meta", {}).get("table_surface_z", 0.0)
         out = []
         for p in k3d:
             if p is None or not np.isfinite(p).all():
                 out.append(p)
                 continue
             zw = float(Tcw[2, :3] @ p + Tcw[2, 3])
-            out.append(p if zw > margin else None)
+            out.append(p if zw > surface_z + margin else None)
         return out
 
     def _build_side_objs_meta(self, ok3d, ok2d) -> Tuple[dict, np.ndarray]:

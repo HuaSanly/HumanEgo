@@ -183,11 +183,12 @@ Those retain the **Live physics** prop editor and may use either arm mode.
 ## BRX whole-body robot, right-arm pick_cube
 
 `configs/pick_cube_brx.yaml` adds the BRX 20260825 robot to the existing task.
-Its base, torso, head, wheels and left arm are fixed; only the seven right-arm
+Its base stays at its original position facing forward, with an upright torso;
+the head, wheels and left arm are fixed. Only the seven right-arm
 joints and coupled right gripper move. It inherits the original pick_cube
-checkpoint, policy camera, prop poses, perception and grasp/release assistance.
-The robot has an independent floor-mounted world pose; the rear table edge is
-shortened to clear its torso, and the recording camera shows the whole robot.
+checkpoint, policy camera, prop geometry, perception and grasp/release assistance.
+The table is 0.86 m high and the two props are repositioned to suit the right arm;
+the robot stays fixed. The recording camera shows the whole robot.
 
 ```bash
 conda activate GlassEgo  # or another environment with simulation/requirements.txt

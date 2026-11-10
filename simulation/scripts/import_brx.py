@@ -28,10 +28,10 @@ from humanego_sim.robots import ASSETS  # noqa: E402
 
 ARM_JOINTS = [f"ArmR{i:02d}_Joint" for i in range(2, 9)]
 JAW_JOINTS = ["JawBlock01_Joint", "JawBlock02_Joint"]
-# Lean the fixed torso towards the table; park the inactive arm at its CAD pose.
+# Keep the torso upright at the zero CAD pose and park the inactive arm.
 # These joints are removed, not left passive. Values are radians.
-PARKED_JOINTS = {"FoldingModularJoint02_Joint": -0.35,
-                 "FoldingModularJoint03_Joint": -0.19661, "Trunk_Joint": -0.36182}
+PARKED_JOINTS = {"FoldingModularJoint02_Joint": 0.0,
+                 "FoldingModularJoint03_Joint": 0.0, "Trunk_Joint": 0.0}
 
 
 def import_brx(source: Path, output: Path) -> Path:

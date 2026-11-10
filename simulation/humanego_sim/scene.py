@@ -32,6 +32,17 @@ from .softbody import add_soft_bread
 G_STATIC, G_ROBOT, G_OBJECT, G_COLLISION = 0, 1, 2, 3
 
 
+def table_surface_z(cfg: dict) -> float:
+    """Tabletop world height above the original surface; floor stays at -0.76 m."""
+    table = cfg["rig"]["table"]
+    height = float(table.get("height", 0.76))
+    if not np.isfinite(height) or height <= float(table["thickness"]):
+        raise ValueError("rig.table.height must be finite and exceed tabletop thickness")
+    if cfg.get("task", "serve_bread") != "pick_cube" and height != 0.76:
+        raise ValueError("adjustable rig.table.height currently supports pick_cube")
+    return height - 0.76
+
+
 def _quat_wxyz(Rm: np.ndarray) -> List[float]:
     x, y, z, w = R.from_matrix(Rm).as_quat()
     return [float(w), float(x), float(y), float(z)]
@@ -358,17 +369,19 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     # ---------------- floor + table ----------------
     tb = cfg["rig"]["table"]
     th = float(tb["thickness"])
-    table_h = 0.76
+    surface_z = table_surface_z(cfg)
+    table_h = 0.76 + surface_z
     floor = wb.add_geom()
     floor.name = "floor"
     floor.type = mujoco.mjtGeom.mjGEOM_PLANE
     floor.size = [4.0, 4.0, 0.05]
-    floor.pos = [0.4, 0.0, -table_h]
+    floor.pos = [0.4, 0.0, -0.76]
     floor.material = "floor"
     floor.group = G_STATIC
 
     table = wb.add_body()
     table.name = "table"
+    table.pos = [0, 0, surface_z]
     cx = 0.5 * (tb["x_min"] + tb["x_max"])
     sx = 0.5 * (tb["x_max"] - tb["x_min"])
     sy = float(tb["half_width"])
@@ -409,8 +422,8 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         for i, yy in enumerate((rail_y - 0.02, -rail_y + 0.02)):
             _add_box(rig, f"post{i}", [0.02, 0.02, (rail_z - 0.02) / 2], [rail_x, yy, (rail_z - 0.02) / 2],
                      material="frame_black")
-    mast_h = cam_p[2] + 0.05
-    _add_box(rig, "mast", [0.015, 0.015, mast_h / 2], [cam_p[0] - 0.045, 0.0, mast_h / 2], material="frame_black")
+    mast_h = cam_p[2] - surface_z + 0.05
+    _add_box(rig, "mast", [0.015, 0.015, mast_h / 2], [cam_p[0] - 0.045, 0.0, surface_z + mast_h / 2], material="frame_black")
     _add_box(rig, "cam_arm", [0.03, 0.012, 0.01], [cam_p[0] - 0.02, 0.0, cam_p[2] + 0.03], material="frame_black")
     # camera body (D405-sized housing) aligned with the optical axis
     R_cam = geo.T_cam_in_world[:3, :3]
@@ -487,7 +500,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
                "solref": list(phys.get("bread_solref", [0.004, 1.0])),
                "solimp": list(phys.get("bread_solimp", [0.9, 0.95, 0.001, 0.5, 2.0])),
                "priority": int(phys.get("bread_priority", 1)), "solmix": float(phys.get("bread_solmix", 1.0))}
-    obj_meta = _add_pick_cube(spec, wb, sc["objects"]) if pick_cube else {}
+    obj_meta = _add_pick_cube(spec, wb, sc["objects"], surface_z) if pick_cube else {}
     for s, bd in breads.items():
         kind = bd["type"]
         x, y, yaw = bd["pose"]
@@ -622,6 +635,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         "K": cam.K.tolist(),
         "image_size": [cam.height, cam.width],
         "nq": int(model.nq),
+        "table_surface_z": surface_z,
     }
     if pick_cube:
         meta["object_roles"] = {role: [n for n, obj in sc["objects"].items() if obj["role"] == role]
@@ -629,7 +643,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     return xml_path, meta
 
 
-def _add_pick_cube(spec, worldbody, objects: dict) -> dict:
+def _add_pick_cube(spec, worldbody, objects: dict, surface_z: float = 0.0) -> dict:
     meta = {}
     for name, obj in objects.items():
         size = np.asarray(obj["size"], dtype=float)
@@ -639,7 +653,7 @@ def _add_pick_cube(spec, worldbody, objects: dict) -> dict:
         x, y, yaw = obj["pose"]
         body = worldbody.add_body()
         body.name = name
-        body.pos = [x, y, half[2] + 0.0008]
+        body.pos = [x, y, surface_z + half[2] + 0.0008]
         body.quat = yaw_quat(yaw)
         body.add_freejoint().name = f"{name}_free"
         if obj["kind"] == "container":

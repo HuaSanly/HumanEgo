@@ -195,10 +195,11 @@ class EpisodeRunner:
         if b is not None and len(b) >= 3:
             c = b.mean(0)
             # centre height: the contour keypoints lie on the visible upper surface, so their mean sits
-            # above the centre (+0.25 cm croissant, +0.5 cm danish); the bread rests on the table
-            # (world z = 0), so half its top height is the centre (within 1 mm on both breads)
+            # above the centre (+0.25 cm croissant, +0.5 cm danish). Estimate
+            # the centre halfway between the table plane and the perceived top.
             if self.cfg.get("perception", {}).get("bread_centre_height", "half_top") == "half_top":
-                c[2] = 0.5 * float(np.sort(b[:, 2])[-3:].mean())
+                surface_z = getattr(env, "meta", {}).get("table_surface_z", 0.0)
+                c[2] = surface_z + 0.5 * (float(np.sort(b[:, 2])[-3:].mean()) - surface_z)
             xy = b[:, :2] - c[:2]
             ev, evec = np.linalg.eigh(xy.T @ xy)
             a2 = evec[:, np.argmax(ev)]
@@ -257,7 +258,8 @@ class EpisodeRunner:
     def _reperceive_apply(self, side: str, so, ctx, controller, geoms: dict) -> bool:
         g = self._perceived_geometry(side, so)
         b = g.get("bread")
-        if not b or b["c"][2] > 0.06:                          # nothing usable, or not lying on the table
+        surface_z = getattr(self.env, "meta", {}).get("table_surface_z", 0.0)
+        if not b or b["c"][2] - surface_z > 0.06:              # nothing usable, or not lying on the table
             return False
         pl = geoms[side].get("plate")
         if pl and np.linalg.norm(np.subtract(b["c"][:2], pl["c"])) < pl["r"]:

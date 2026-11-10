@@ -29,7 +29,7 @@ export class LiveEpisode {
     for (const [name, [x, y, yaw]] of Object.entries(scene)) {
       const o = spec.objects[name]; if (!o) continue;
       if (o.soft) {     // soft bread: place the deformation grid rigidly (short drop-in)
-        const c = Math.cos(yaw * Math.PI / 180), s = Math.sin(yaw * Math.PI / 180), z = o.half_height + 0.0008 + 0.05;
+        const c = Math.cos(yaw * Math.PI / 180), s = Math.sin(yaw * Math.PI / 180), z = (spec.table_surface_z || 0) + o.half_height + 0.0008 + 0.05;
         for (let i = 0; i < o.nodes.length; i++) {
           const lx = o.local[3 * i], ly = o.local[3 * i + 1], lz = o.local[3 * i + 2];
           const w = [x + c * lx - s * ly, y + s * lx + c * ly, z + lz];
@@ -37,7 +37,7 @@ export class LiveEpisode {
         }
         continue;
       }
-      const a = o.qadr, z = name === 'plate' ? 0.0005 : o.half_height + 0.0008;
+      const a = o.qadr, z = (spec.table_surface_z || 0) + (name === 'plate' ? 0.0005 : o.half_height + 0.0008);
       const q = yawQuat(yaw);
       data.qpos[a] = x; data.qpos[a + 1] = y; data.qpos[a + 2] = z + (name === 'plate' ? 0.02 : 0.05);   // short drop-in
       for (let i = 0; i < 4; i++) data.qpos[a + 3 + i] = q[i];

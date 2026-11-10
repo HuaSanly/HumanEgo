@@ -119,13 +119,36 @@ def test_fixed_torso_remains_vertical(env):
     np.testing.assert_allclose(rotation @ [0, -1, 0], [0, 0, 1], atol=1e-5)
 
 
+def test_head_camera_frames_the_separated_props(env):
+    assert np.linalg.norm(env.object_pos("cube")[:2] - env.object_pos("container")[:2]) > 0.35
+    camera = env.m.camera("right/head_view").id
+    assert env.m.cam_bodyid[camera] == env.m.body("right/EYEM_Link").id
+    rotation = env.d.cam_xmat[camera].reshape(3, 3)
+    forward = -rotation[:, 2]
+    assert forward[2] < -0.7  # physical optical axis points down at the table
+    optical = rotation @ np.diag([1, -1, -1])  # MuJoCo -> OpenCV camera axes
+    focal = env.H / (2 * np.tan(np.deg2rad(env.m.cam_fovy[camera] / 2)))
+    for name, obj in env.cfg["scene"]["objects"].items():
+        half = np.asarray(obj["size"]) / 2
+        if name == "container":
+            half[:2] += obj["rim"]
+            half[1] += 0.016  # include the handles
+        corners = np.array([[x, y, z] for x in (-half[0], half[0])
+                            for y in (-half[1], half[1]) for z in (-half[2], half[2])])
+        world = corners @ env.body_T_world(name)[:3, :3].T + env.object_pos(name)
+        points = (world - env.d.cam_xpos[camera]) @ optical
+        assert np.all(points[:, 2] > 0)
+        pixels = points[:, :2] / points[:, 2:] * focal + [env.W / 2, env.H / 2]
+        assert np.all(pixels > 20) and np.all(pixels < [env.W - 20, env.H - 20])
+
+
 def test_raised_table_layout_and_browser_reset_share_height(env, tmp_path):
     import json
     import yaml
     from humanego_sim.live_export import export_live
     from humanego_sim.pick_cube_sampling import layout_reason
 
-    with open(Path(SIM_ROOT) / "configs" / "eval_pick_cube.yaml") as file:
+    with open(Path(SIM_ROOT) / "configs" / env.cfg["evaluation"]["sampling"]) as file:
         sampling = yaml.safe_load(file)
     assert layout_reason(env.default_scene(), env.cfg, sampling) == ""
     folder = Path(export_live(env, str(tmp_path), "brx_raised_table"))
@@ -230,7 +253,8 @@ def test_brx_lifts_with_both_pads_and_releases_inside_container(env):
     assert np.all(pad_forces() > 0.1)
     move([cube[0], cube[1], surface + 0.12])
     midpoint = (cube[:2] + container[:2]) / 2
-    move([*midpoint, surface + 0.12])
+    # Cross the wrist's limited workspace at a reachable transport height.
+    move([*midpoint, surface + 0.10])
     move([*container[:2], surface + 0.12])
     arm.open_gripper(goal_time=0.5)
     env.step(round(1.5 / env.dt))

@@ -74,7 +74,10 @@ def evaluate_pick_cube(args, overrides):
             raise ValueError("--scene-seed differs from frozen trials")
     else:
         cfg = load_config(args.config, overrides)
-        sampling = yaml.safe_load(Path(args.sampling or SAMPLING_CONFIG).read_text())
+        configured_sampling = cfg.get("evaluation", {}).get("sampling")
+        default_sampling = (Path(SAMPLING_CONFIG).parent / configured_sampling
+                            if configured_sampling else Path(SAMPLING_CONFIG))
+        sampling = yaml.safe_load(Path(args.sampling or default_sampling).read_text())
         if args.trials:
             manifest = json.loads(Path(args.trials).read_text())
             if args.n is not None and args.n != manifest["n_scenes"]:

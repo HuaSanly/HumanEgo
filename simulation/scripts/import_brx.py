@@ -28,10 +28,11 @@ from humanego_sim.robots import ASSETS  # noqa: E402
 
 ARM_JOINTS = [f"ArmR{i:02d}_Joint" for i in range(2, 9)]
 JAW_JOINTS = ["JawBlock01_Joint", "JawBlock02_Joint"]
-# Keep the torso upright at the zero CAD pose and park the inactive arm.
+# Keep the torso upright and aim the fixed head down towards the task table.
 # These joints are removed, not left passive. Values are radians.
 PARKED_JOINTS = {"FoldingModularJoint02_Joint": 0.0,
-                 "FoldingModularJoint03_Joint": 0.0, "Trunk_Joint": 0.0}
+                 "FoldingModularJoint03_Joint": 0.0, "Trunk_Joint": 0.0,
+                 "Head02_Joint": 0.65, "Head03_Joint": 0.95}
 
 
 def import_brx(source: Path, output: Path) -> Path:
@@ -100,6 +101,12 @@ def import_brx(source: Path, output: Path) -> Path:
     site.quat = np.r_[xyzw[3], xyzw[:3]]
     site.size = [0.004, 0, 0]
     site.group = 5
+    # The CAD centre eye faces local +X. MuJoCo cameras look down local -Z,
+    # with +Y up. Put the optical centre just ahead of the lens surface.
+    camera = spec.body("EYEM_Link").add_camera(name="head_view")
+    camera.pos = [0.0035, 0, 0]
+    camera.quat = Rotation.from_matrix([[0, 0, -1], [-1, 0, 0], [0, 1, 0]]).as_quat()[[3, 0, 1, 2]]
+    camera.fovy = 70.0  # simulation preview FOV; no factory intrinsics in the URDF
     # The trunk is an open frame and the wrist camera includes a bracket. Keep
     # separate CAD components separate instead of filling their gaps with one
     # convex collision hull. Original meshes still provide the visuals.

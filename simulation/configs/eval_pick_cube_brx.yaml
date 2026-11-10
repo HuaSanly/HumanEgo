@@ -1,0 +1,13 @@
+# BRX layout: the container is farther from the cube, towards table +Y.
+cube_xy_jitter: [0.03, 0.03]
+container_xy_jitter: [0.03, 0.03]
+cube_yaw_jitter_deg: 0.0
+container_yaw_jitter_deg: 0.0
+table_margin: 0.01
+min_object_gap: 0.02
+camera_margin_px: 4
+# Geometric sampling envelope, not an IK guarantee for arbitrary policy poses.
+workspace:
+  x: [0.18, 0.55]
+  y: [-0.42, 0.45]
+max_attempts_per_scene: 1000

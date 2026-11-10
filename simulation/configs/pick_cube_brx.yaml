@@ -29,4 +29,6 @@ scene:
     cube:
       pose: [0.34, -0.095, 0.0]
     container:
-      pose: [0.40626, 0.08, 0.0]
+      pose: [0.44, 0.27, 0.0]
+evaluation:
+  sampling: eval_pick_cube_brx.yaml

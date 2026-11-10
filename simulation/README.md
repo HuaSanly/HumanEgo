@@ -186,9 +186,10 @@ Those retain the **Live physics** prop editor and may use either arm mode.
 Its base stays at its original position facing forward, with an upright torso;
 the head, wheels and left arm are fixed. Only the seven right-arm
 joints and coupled right gripper move. It inherits the original pick_cube
-checkpoint, policy camera, prop geometry, perception and grasp/release assistance.
+checkpoint, policy camera, prop footprints, perception and grasp/release assistance.
 The table is 0.86 m high and the two props are repositioned to suit the right arm;
-the container is about 38 cm from the cube centre. The robot stays fixed and its
+the container is about 36 cm from the cube centre, with its original real-scene
+reconstruction height restored to about 9.65 cm. The robot stays fixed and its
 head looks down at the task. `right/head_view` is a real camera attached to the
 centre eye; use `--camera_view right/head_view --video` to record that view.
 

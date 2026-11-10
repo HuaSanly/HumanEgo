@@ -15,14 +15,19 @@ from humanego_sim.scene import build_scene, rig_geometry
 CONFIG = str(Path(SIM_ROOT) / "configs" / "pick_cube_brx.yaml")
 
 
-def test_brx_keeps_the_original_policy_camera_and_prop_geometry():
+def test_brx_keeps_the_original_policy_camera_and_restores_container_height():
     base = load_config(str(Path(SIM_ROOT) / "configs" / "pick_cube.yaml"))
     cfg = load_config(CONFIG)
     for key in ("appearance", "perception", "policy", "camera", "camera_intrinsics"):
         assert cfg[key] == base[key]
     for name, obj in base["scene"]["objects"].items():
-        assert {k: v for k, v in cfg["scene"]["objects"][name].items() if k != "pose"} == {
-            k: v for k, v in obj.items() if k != "pose"}
+        actual = cfg["scene"]["objects"][name]
+        excluded = {"pose", "size"} if name == "container" else {"pose"}
+        assert {k: v for k, v in actual.items() if k not in excluded} == {
+            k: v for k, v in obj.items() if k not in excluded}
+        if name == "container":
+            assert actual["size"][:2] == obj["size"][:2]
+            assert actual["size"][2] == pytest.approx(0.09647649800453617)
     assert cfg["mode"] == "single" and cfg["robot"] == "brx20260825"
     assert not cfg["rig"]["arm_mount"]
     original = rig_geometry(base, ["right"])

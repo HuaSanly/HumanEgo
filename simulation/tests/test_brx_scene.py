@@ -52,7 +52,7 @@ def test_invalid_base_pose_fails_before_building(position):
         rig_geometry(cfg, ["right"])
 
 
-@pytest.mark.parametrize("surface", [0.0, 0.10, -0.10])
+@pytest.mark.parametrize("surface", [0.0, 0.15, -0.10])
 def test_perceived_grasp_height_is_relative_to_the_table(surface):
     from types import SimpleNamespace
     from humanego_sim.runner import EpisodeRunner
@@ -101,7 +101,8 @@ def test_only_right_arm_and_jaws_move_and_scene_stays_settled(env):
     ready = env.arms["right"].T_base_in_world @ env.arms["right"].get_T_ee_in_base()
     tilt = np.rad2deg(np.arccos(np.clip(-ready[2, 2], -1, 1)))
     assert 30 < tilt < 60
-    assert np.linalg.norm(ready[:2, 3] - env.object_pos("cube")[:2]) > 0.09
+    assert np.linalg.norm(ready[:2, 3] - env.object_pos("cube")[:2]) > 0.08
+    assert ready[2, 3] - env.meta["table_surface_z"] > 0.19
     before = env.d.qpos.copy()
     env.step(round(5 / env.dt))
     assert np.isfinite(env.d.qpos).all() and np.isfinite(env.d.qvel).all()
@@ -110,7 +111,7 @@ def test_only_right_arm_and_jaws_move_and_scene_stays_settled(env):
         np.testing.assert_allclose(env.object_pos(name)[:2], env.cfg["scene"]["objects"][name]["pose"][:2], atol=0.002)
         assert env.object_lowest_z(name) == pytest.approx(env.meta["table_surface_z"], abs=0.002)
     assert model.geom_pos[model.geom("floor").id, 2] == -0.76
-    assert env.body_T_world("table")[2, 3] == pytest.approx(0.10)
+    assert env.body_T_world("table")[2, 3] == pytest.approx(0.15)
     for contact in env.d.contact[:env.d.ncon]:
         bodies = [model.body(int(model.geom_bodyid[g])).name for g in contact.geom]
         if any(name.startswith("right/") for name in bodies):
@@ -162,13 +163,13 @@ def test_raised_table_layout_and_browser_reset_share_height(env, tmp_path):
     assert layout_reason(env.default_scene(), env.cfg, sampling) == ""
     folder = Path(export_live(env, str(tmp_path), "brx_raised_table"))
     spec = json.loads((folder / "spec.json").read_text())
-    assert spec["table_surface_z"] == pytest.approx(0.10)
+    assert spec["table_surface_z"] == pytest.approx(0.15)
     model = mujoco.MjModel.from_xml_path(str(folder / "scene.xml"))
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     for name, obj in env.cfg["scene"]["objects"].items():
         # MJCF serializes positions to six decimal places.
-        assert data.xpos[model.body(name).id, 2] == pytest.approx(0.10 + obj["size"][2] / 2 + 0.0008, abs=1e-6)
+        assert data.xpos[model.body(name).id, 2] == pytest.approx(0.15 + obj["size"][2] / 2 + 0.0008, abs=1e-6)
 
 
 def test_brx_camera_pose_and_ik_follow_the_actual_tcp(env):

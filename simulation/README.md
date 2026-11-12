@@ -222,6 +222,44 @@ whole robot cannot accidentally be instantiated twice. See
 [`docs/brx20260825.md`](docs/brx20260825.md) for geometry, physics assumptions,
 web export and validation details.
 
+## BRX right-arm serve_bread
+
+`configs/serve_bread_brx.yaml` inherits `serve_bread.yaml` and replaces the
+Trossen arms with one fixed BRX whole-body robot, operating its right arm.
+The task remains `serve_bread`; the original single-arm bread/plate positions,
+sizes, soft-body physics, perception and official checkpoint are inherited.
+The default production controller retains the existing grasp threshold, latch,
+automatic lift and idle-done behavior. The tuned grasp skill, our geometric
+release assistance and guarded withdrawal are disabled. Normal done handling
+still opens the gripper and returns home, as in the original serve_bread loop.
+
+The tabletop is 0.96 m above the floor. The external policy camera rises by
+the same 20 cm, preserving the original camera-to-prop geometry. BRX stays
+upright at its original floor height, 10 cm forward of the pick_cube BRX pose
+to reach the original bread location. The rear table edge is moved forward to
+clear the robot; its footprint still contains both original props. The
+base-relative safety floor is 0.50 m, about 21 mm below the tabletop. The head
+camera remains a preview camera; policy observations use the inherited D405.
+
+```bash
+conda activate GlassEgo
+# Import the robot if its local assets are missing.
+python simulation/scripts/import_brx.py --source ~/BRX20260825
+# Download the official checkpoint if checkpoints/serve_bread is missing.
+huggingface-cli download Leo-TX/HumanEgo --include "serve_bread/*" --local-dir ./checkpoints
+
+python simulation/scripts/run_episode.py --config simulation/configs/serve_bread_brx.yaml --viewer
+python simulation/scripts/run_episode.py --config simulation/configs/serve_bread_brx.yaml \
+  --seed 0 --video --out serve_bread_brx_s0
+
+python -m pytest simulation/tests/test_serve_bread_brx.py -q
+```
+
+The initial seed-0 run with the official checkpoint and production parameters
+timed out at 40 s without grasping. This is a baseline for trying the task on
+BRX, not a validated successful transfer. The table-height regression checks cover both rigid and soft bread,
+reset poses, relative-height success/failure metrics and perceived place height.
+
 ## Results
 
 ### Reproducible pick_cube batch evaluation

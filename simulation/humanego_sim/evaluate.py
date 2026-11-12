@@ -166,7 +166,7 @@ def classify_failure(side_res: dict) -> str:
         return "success"
     if not side_res.get("grasped"):
         return "never_closed"
-    lifted = side_res.get("bread_max_z", 1.0) > 0.07
+    lifted = side_res.get("bread_max_z", 1.0) - side_res.get("table_surface_z", 0.0) > 0.07
     d = side_res.get("dist_to_plate_center", 1.0)
     if not lifted:
         return "grasp_missed"            # gripper closed but the bread never left the table

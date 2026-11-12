@@ -38,8 +38,6 @@ def table_surface_z(cfg: dict) -> float:
     height = float(table.get("height", 0.76))
     if not np.isfinite(height) or height <= float(table["thickness"]):
         raise ValueError("rig.table.height must be finite and exceed tabletop thickness")
-    if cfg.get("task", "serve_bread") != "pick_cube" and height != 0.76:
-        raise ValueError("adjustable rig.table.height currently supports pick_cube")
     return height - 0.76
 
 
@@ -512,7 +510,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
             cells = sp_cfg.get("cells", {})
             sp_cfg["cells"] = cells.get(kind, [4, 2, 2]) if isinstance(cells, dict) else cells
             # compiled undeformed with yaw 0; the episode reset places it (env.set_object_pose)
-            grid = add_soft_bread(spec, f"bread_{s}", kind, [x, y, ext[2] / 2 + 0.0008], mass,
+            grid = add_soft_bread(spec, f"bread_{s}", kind, [x, y, surface_z + ext[2] / 2 + 0.0008], mass,
                                   bread_vis[(kind, scl)], _scaled(f"{kind}_flex", scl), f"{kind}_mat", sp_cfg, contact,
                                   flex_group=G_COLLISION, skin_group=G_OBJECT)
             obj_meta[f"bread_{s}"] = {"kind": kind, "extents": ext.tolist(), "side": s, "soft": grid}
@@ -521,7 +519,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
             continue
         b = wb.add_body()
         b.name = f"bread_{s}"
-        b.pos = [x, y, ext[2] / 2 + 0.0005]
+        b.pos = [x, y, surface_z + ext[2] / 2 + 0.0005]
         b.quat = yaw_quat(yaw)
         fj = b.add_freejoint()
         fj.name = f"bread_{s}_free"
@@ -563,7 +561,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         px, py, pyaw = plate_pose
         pb = wb.add_body()
         pb.name = "plate"
-        pb.pos = [px, py, 0.0005]
+        pb.pos = [px, py, surface_z + 0.0005]
         pb.quat = yaw_quat(pyaw)
         fj = pb.add_freejoint()
         fj.name = "plate_free"

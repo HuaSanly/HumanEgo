@@ -216,7 +216,8 @@ class EpisodeRunner:
                 return out
             plate = pts.get("obj2")
             # place height: bread centre height on the table + the plate's floor (rim keypoints - 1.35 cm)
-            floor = float(plate[:, 2].mean()) - 0.0135 if plate is not None else 0.0085
+            surface_z = getattr(env, "meta", {}).get("table_surface_z", 0.0)
+            floor = float(plate[:, 2].mean()) - 0.0135 - surface_z if plate is not None else 0.0085
             out["place_z"] = float(c[2]) + max(floor, 0.0)
             if plate is not None and len(plate) >= 3:          # the plate's centre and rim radius (horizontal)
                 pc = plate[:, :2].mean(0)
@@ -658,7 +659,7 @@ class EpisodeRunner:
         next_pol, next_ctl, next_rec = 0.0, 0.0, 0.0
         pending = None          # (deliver_time, payload) — inference latency
         frames, policy_log = list(intro_frames), []
-        self._bread_max_z = {}
+        self._bread_max_z = {s: float(env.object_pos(self._manipulated_body(s))[2]) for s in sides}
         img_dir = None
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
@@ -878,7 +879,7 @@ class EpisodeRunner:
                 inference.pace(env.dt)
             for s in sides:
                 bz = env.object_pos(self._manipulated_body(s))[2]
-                if bz > self._bread_max_z.get(s, 0.0):
+                if bz > self._bread_max_z[s]:
                     self._bread_max_z[s] = float(bz)
             if all(c.wrap_phase in ("finished", "blocked") for c in ctxs.values()):
                 # keep recording a short tail so the viewer can ease out
@@ -934,18 +935,20 @@ class EpisodeRunner:
             return self._evaluate_pick_cube(ctxs)
         Tp = env.body_T_world("plate")
         R_plate = env.meta["objects"]["plate"]["R"]
+        surface_z = env.meta.get("table_surface_z", 0.0)
         out = {}
         for s, ctx in ctxs.items():
             Tb = env.body_T_world(f"bread_{s}")
             dxy = float(np.linalg.norm(Tb[:2, 3] - Tp[:2, 3]))
             low = env.object_lowest_z(f"bread_{s}")
-            on_plate = dxy < R_plate and low > 0.003 and Tb[2, 3] < 0.12
+            on_plate = dxy < R_plate and low - surface_z > 0.003 and Tb[2, 3] - surface_z < 0.12
             released = not env.arms[s].gripper_cmd_closed()
             out[s] = {"success": bool(on_plate and released), "dist_to_plate_center": round(dxy, 4),
                       "lowest_z": round(low, 4),
-                      "success_strict": bool(dxy < R_plate - 0.02 and 0.004 < Tb[2, 3] < 0.12 and released),
+                      "success_strict": bool(dxy < R_plate - 0.02 and 0.004 < Tb[2, 3] - surface_z < 0.12 and released),
                       "bread_z": round(float(Tb[2, 3]), 4), "grasped": bool(ctx.hand["has_ever_grasped"]),
                       "bread_max_z": round(getattr(self, "_bread_max_z", {}).get(s, 0.0), 4),
+                      "table_surface_z": float(surface_z),
                       "done_reason": ctx.done_reason or "timeout"}
         return out
 

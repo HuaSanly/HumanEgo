@@ -1,0 +1,32 @@
+# Official serve_bread policy and production controller, using the fixed BRX right arm.
+base_config: serve_bread.yaml
+robot: brx20260825
+mode: single
+profile: production
+rig:
+  base_pose:
+    right:
+      # Ten centimetres forward from pick_cube_brx, to reach the original bread.
+      position: [-0.04639, 0.32001, -0.32104]
+      rpy_deg: [0, 0, 0]
+  arm_mount: false
+  # Raise the external policy camera together with the table so its view of the
+  # original bread/plate layout retains the serve_bread calibration.
+  cam_height: 0.566
+  table:
+    height: 0.96
+    x_min: 0.29
+  view_cameras:
+    front_view:
+      position: [0.88, -1.85, 0.95]
+      look_at: [0.10, 0.10, 0.05]
+      fovy: 48
+control:
+  # Base-relative floor, about 21 mm below this tabletop.
+  safe_z_min: 0.50
+  grasp_assist:
+    enabled: false
+  release_assist:
+    enabled: false
+  withdrawal:
+    enabled: false

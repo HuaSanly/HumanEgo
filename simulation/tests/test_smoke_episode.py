@@ -6,7 +6,7 @@ import os
 import numpy as np
 import pytest
 
-from conftest import CKPT, robots_with_assets
+from conftest import CKPT, robot_available, robots_with_assets
 
 pytestmark = pytest.mark.sim
 
@@ -42,3 +42,27 @@ def test_five_second_episode(robot, profile, policy):
     # the right arm left its start pose towards the bread
     arm = env.arms["right"]
     assert np.linalg.norm(arm.get_j() - np.asarray(env.initial_joints("right"))) > 0.05
+
+
+@pytest.mark.skipif(not robot_available("brx20260825"), reason="BRX assets not imported")
+def test_brx_serve_bread_executes_policy_targets_without_ik_stalling(policy):
+    from humanego_sim.env import SIM_ROOT, ServeBreadSim, load_config
+    from humanego_sim.runner import EpisodeRunner
+
+    pol, dev = policy
+    cfg = load_config(os.path.join(SIM_ROOT, "configs", "serve_bread_brx.yaml"),
+                      {"control": {"max_episode_time": 5.0}})
+    try:
+        env = ServeBreadSim(cfg)
+    except Exception as e:
+        pytest.skip(f"no OpenGL context: {e!r}")
+    try:
+        env.reset()
+        arm = env.arms["right"]
+        start = arm.get_T_ee_in_base()[:3, 3].copy()
+        result = EpisodeRunner(cfg, policy=pol, device=dev, env=env).run(seed=0, verbose=False, intro=False)
+        assert result.n_policy_steps >= 10
+        assert result.metrics["ik_fail"] == 0
+        assert np.linalg.norm(arm.get_T_ee_in_base()[:3, 3] - start) > 0.05
+    finally:
+        env.renderer.close()

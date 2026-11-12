@@ -7,7 +7,8 @@ rig:
   base_pose:
     right:
       # Ten centimetres forward from pick_cube_brx, to reach the original bread.
-      position: [-0.04639, 0.32001, -0.32104]
+      # Shift right by five centimetres so the policy's wrist poses stay reachable.
+      position: [-0.04639, 0.27, -0.32104]
       rpy_deg: [0, 0, 0]
   arm_mount: false
   # Raise the external policy camera together with the table so its view of the

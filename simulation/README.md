@@ -235,8 +235,9 @@ still opens the gripper and returns home, as in the original serve_bread loop.
 
 The tabletop is 0.96 m above the floor. The external policy camera rises by
 the same 20 cm, preserving the original camera-to-prop geometry. BRX stays
-upright at its original floor height, 10 cm forward of the pick_cube BRX pose
-to reach the original bread location. The rear table edge is moved forward to
+upright at its original floor height, 10 cm forward and 5 cm right of the pick_cube
+BRX pose, keeping the policy's wrist targets within the arm's workspace. The rear
+table edge is moved forward to
 clear the robot; its footprint still contains both original props. The
 base-relative safety floor is 0.50 m, about 21 mm below the tabletop. The head
 camera remains a preview camera; policy observations use the inherited D405.
@@ -255,9 +256,12 @@ python simulation/scripts/run_episode.py --config simulation/configs/serve_bread
 python -m pytest simulation/tests/test_serve_bread_brx.py -q
 ```
 
-The initial seed-0 run with the official checkpoint and production parameters
-timed out at 40 s without grasping. This is a baseline for trying the task on
-BRX, not a validated successful transfer. The table-height regression checks cover both rigid and soft bread,
+The initial base alignment stalled after repeated IK rejections. After the 5 cm
+rightward correction, a complete seed-0 run with the official checkpoint and
+production parameters had no IK rejections and the TCP moved about 20 cm.
+It still timed out at 40 s without grasping, so successful task transfer remains
+unverified. A closed-loop smoke test checks motion and IK acceptance, independently
+of placement success. The table-height regression checks cover both rigid and soft bread,
 reset poses, relative-height success/failure metrics and perceived place height.
 
 ## Results

@@ -81,6 +81,8 @@ def export_live(env, out_root: str, key: str) -> str:
     flat = lambda T: [round(float(v), 7) for v in T.ravel()]
     spec_json = {
         "key": key, "sides": env.sides, "mode": env.cfg.get("mode"),
+        "task": env.cfg.get("task", "serve_bread"), "scene_only": bool(env.cfg.get("scene_only")),
+        "object_roles": env.meta.get("object_roles"),
         "robot": {"name": r.name, "arm_joints": r.arm_joints, "arm_actuators": r.arm_actuators,
                   "gripper_actuator": r.gripper_actuator, "gripper_open": r.gripper_open, "gripper_closed": r.gripper_closed,
                   "tool_site": r.tool_site, "R_tool_to_ee": flat(r.R_tool_to_ee),

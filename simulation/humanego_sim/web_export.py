@@ -160,6 +160,7 @@ def export_model(env, out_root: str, key: str) -> Dict:
     layout = frame_layout(env)
     model = {
         "key": key, "robot": robot, "robot_label": env.robot.label, "camera": env.cam.name,
+        "task": env.cfg.get("task", "serve_bread"), "scene_only": bool(env.cfg.get("scene_only")),
         "camera_label": env.cam.label, "mode": env.cfg.get("mode"), "sides": env.sides, "nq": int(m.nq),
         "bodies": bodies, "geoms": geoms, "materials": WEB_MATERIALS, "tool_sites": tool_sites,
         "policy_camera": {"T_cam_in_world": _r(env.T_cam_in_world), "K": _r(env.K), "width": env.W, "height": env.H},
@@ -298,6 +299,7 @@ def export_rollout(env, log_dir: str, out_root: str, rid: str, scene_meta: Optio
         "result": meta["result"], "scene": meta["scene_init"], "extra": scene_meta or {},
     }
     p = os.path.join(out_root, "data", "rollouts", f"{rid}.json")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w") as f:
         json.dump(out, f, separators=(",", ":"))
     return out

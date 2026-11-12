@@ -26,10 +26,11 @@ export class LiveSession {
     this.model?.delete?.(); this.data?.delete?.();
     this.model = mj.MjModel.from_xml_path(`${root}/scene.xml`);
     this.data = new mj.MjData(this.model);
-    if (!this.policy) this.policy = await LivePolicy.create('assets/policy/', this.status);
-    this.cam = new PolicyCamera(this.viewer, this.viewer.model.policy_camera);
+    if (!this.spec.scene_only && !this.policy) this.policy = await LivePolicy.create('assets/policy/', this.status);
+    this.cam = this.spec.scene_only ? null : new PolicyCamera(this.viewer, this.viewer.model.policy_camera);
     this.key = key; this.mj = mj;
-    this.status(`Ready · ${this.policy.device === 'webgpu' ? 'WebGPU · 20 flow steps' : 'CPU · 10 flow steps (slower)'}`);
+    this.status(this.spec.scene_only ? 'Ready · physics preview' :
+      `Ready · ${this.policy.device === 'webgpu' ? 'WebGPU · 20 flow steps' : 'CPU · 10 flow steps (slower)'}`);
   }
 
   async run(scene, seed = 0, onPolicy, onDone) {

@@ -35,12 +35,16 @@ def side_rate(rollouts: List[dict], side: str) -> Optional[float]:
 def summary_rows(configs: List[dict]) -> List[dict]:
     rows = []
     for c in configs:
+        if c.get("scene_only"):
+            continue
         rs = c["rollouts"]
         prof = c.get("profile") or {"profile": "production"}
         row = {"robot": c["robot"], "camera": c["camera"], "mode": c["mode"], "n": len(rs),
                "right": side_rate(rs, "right"), "left": side_rate(rs, "left"),
                "both": (sum(float(r["success"]) for r in rs) / len(rs)) if rs else None,
                "profile": prof.get("profile", "production")}
+        if c.get("task") == "pick_cube":
+            row["task"] = "pick_cube"
         if prof.get("autotune_run"):
             row["autotune_run"] = prof["autotune_run"]
         ho = [prof[k] for k in ("final", "held_out", "held_out_2") if k in prof]
@@ -56,7 +60,14 @@ def results_note(configs: List[dict], robot_labels: Dict[str, str]) -> str:
     """Protocol + where the numbers come from, generated from the configs' profiles."""
     by_robot = {}
     for c in configs:
+        if c.get("scene_only") or c.get("task") == "pick_cube":
+            continue
         by_robot.setdefault(c["robot"], c.get("profile") or {"profile": "production"})
+    if not by_robot:
+        if any(c.get("task") == "pick_cube" and not c.get("scene_only") for c in configs):
+            return "pick_cube: local trained policy rollouts. Success means the grasped block was released " \
+                   "and is resting fully inside the container. These are individual runs, not a benchmark."
+        return "Scene previews only. No policy was run and no task success rate was evaluated."
     parts = []
     for robot, prof in by_robot.items():
         name = robot_labels.get(robot, robot)
@@ -136,6 +147,7 @@ def validate(man: dict, web: Optional[str] = None) -> List[str]:
     need(isinstance(man["configs"], list) and man["configs"], "configs must be a non-empty list")
     d = man["default"]
     need(any(c["robot"] == d.get("robot") and c["camera"] == d.get("camera") and c["mode"] == d.get("mode")
+             and c.get("task", "serve_bread") == d.get("task", "serve_bread")
              for c in man["configs"]), "default config not in configs")
     ids = set()
     for c in man["configs"]:
@@ -152,11 +164,18 @@ def validate(man: dict, web: Optional[str] = None) -> List[str]:
             need(rid not in ids, f"duplicate rollout id {rid}")
             ids.add(rid)
             need(rid.startswith(c.get("model", "")), f"{rid}: id does not start with the model key")
-            need(set(r.get("per_side", {})) == sides, f"{rid}: per_side {set(r.get('per_side', {}))} != {sides}")
-            need(isinstance(r.get("success"), bool), f"{rid}: success must be a bool")
-            need(r.get("success") == all(v["success"] for v in r.get("per_side", {}).values()),
-                 f"{rid}: success != all sides served")
-            for name in ["plate"] + [f"bread_{s}" for s in sides]:
+            if c.get("scene_only"):
+                need(r.get("success") is None and r.get("per_side") == {}, f"{rid}: preview must be unevaluated")
+                names = list(c.get("objects", {}))
+                need(bool(names), f"{rid}: preview objects missing")
+            else:
+                need(set(r.get("per_side", {})) == sides, f"{rid}: per_side {set(r.get('per_side', {}))} != {sides}")
+                need(isinstance(r.get("success"), bool), f"{rid}: success must be a bool")
+                need(r.get("success") == all(v["success"] for v in r.get("per_side", {}).values()),
+                     f"{rid}: success != all sides served")
+                names = (["container", "cube"] if c.get("task") == "pick_cube"
+                         else ["plate"] + [f"bread_{s}" for s in sides])
+            for name in names:
                 need(len(r.get("scene", {}).get(name, [])) == 3, f"{rid}: scene.{name} must be [x, y, yaw]")
             need(r.get("fmt", "json") in ("json", "bin"), f"{rid}: bad fmt")
             if web:

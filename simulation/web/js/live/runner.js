@@ -50,7 +50,7 @@ export class LiveEpisode {
       this.arms[s] = arm;
     }
     mj.mj_forward(model, data);
-    this.phase = 'settle';
+    this.phase = spec.scene_only ? 'preview' : 'settle';
     this.done = false;
     this.entries = {};
     if (init?.state) {
@@ -276,6 +276,11 @@ export class LiveEpisode {
   /** Advance the simulation to sim time `tTarget` (awaits the policy whenever a re-plan is due). */
   async advanceTo(tTarget) {
     if (this.done) return;
+    if (this.spec.scene_only) {
+      while (this.t < Math.min(tTarget, 5)) this._step();
+      if (this.t >= 5) { this.done = true; this.onDone?.({}); }
+      return;
+    }
     while (this.t < tTarget && !this.done) {
       if (this.phase === 'settle') {
         this._step();

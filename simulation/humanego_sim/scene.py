@@ -64,6 +64,15 @@ def rig_geometry(cfg: dict, sides: List[str]) -> RigGeometry:
     T_base = {}
     for s in ("right", "left"):
         T_base[s] = T_cam @ Tbc[s]
+    view = rig.get("camera_pose")
+    if view:
+        # Change the observation camera without moving the calibrated robot bases.
+        pitch = np.deg2rad(float(view["pitch_deg"]))
+        T_cam = np.eye(4)
+        T_cam[:3, :3] = [[0, -np.sin(pitch), np.cos(pitch)], [-1, 0, 0],
+                            [0, -np.cos(pitch), -np.sin(pitch)]]
+        T_cam[:3, 3] = view["position"]
+        Tbc = {s: np.linalg.inv(T_cam) @ T_base[s] for s in T_base}
     return RigGeometry(T_cam_in_world=T_cam, T_base_in_world={s: T_base[s] for s in sides},
                        T_base_in_cam={s: Tbc[s] for s in sides})
 
@@ -178,17 +187,19 @@ def _add_box(body, name, size, pos, rgba=None, material=None, group=G_STATIC, co
 # ---------------------------------------------------------------------------
 def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional[str] = None) -> Tuple[str, dict]:
     """Build the MJCF, write it under ASSETS/scenes/, and return (xml_path, meta)."""
+    task = cfg.get("task", "serve_bread")
+    pick_cube = task == "pick_cube"
     mode = cfg.get("mode", "bimanual")
     sides = ["right", "left"] if mode == "bimanual" else ["right"]
     phys = cfg.get("physics", {})
     geo = rig_geometry(cfg, sides)
 
     spec = mujoco.MjSpec()
-    spec.modelname = f"humanego_serve_bread_{robot.name}_{mode}"
+    spec.modelname = f"humanego_{task}_{robot.name}_{mode}"
     spec.modelfiledir = ASSETS          # relative asset paths resolve from the assets root
     spec.compiler.degree = False
     spec.compiler.autolimits = True
-    soft = phys.get("bread_model", "soft") == "soft"
+    soft = not pick_cube and phys.get("bread_model", "soft") == "soft"
     spec.option.timestep = float(phys.get("timestep", 0.002))
     # flex elasticity is only integrated implicitly by the `discrete` (velocity-stepping) integrator
     spec.option.integrator = (mujoco.mjtIntegrator.mjINT_DISCRETE if soft
@@ -226,6 +237,15 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     m.specular = 0.15
     m.shininess = 0.3
 
+    appearance = cfg.get("appearance", {})
+    table_look = appearance.get("table", {})
+    if table_look:
+        m = spec.add_material()
+        m.name = "table_custom"
+        m.rgba = table_look["rgba"]
+        m.specular = float(table_look.get("specular", 0.05))
+        m.shininess = float(table_look.get("shininess", 0.1))
+
     m = spec.add_material()
     m.name = "frame_black"
     m.rgba = [0.06, 0.06, 0.065, 1.0]
@@ -237,7 +257,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     m.rgba = [0.62, 0.62, 0.60, 1.0]
     m.reflectance = 0.0
 
-    breads = _breads(cfg, mode, sides)
+    breads = {} if pick_cube else _breads(cfg, mode, sides)
     kinds = sorted({b["type"] for b in breads.values()})
     bread_vis = {}
     for obj in kinds:
@@ -280,16 +300,17 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
                     if sc != 1.0:
                         mc.scale = [sc, sc, sc]
 
-    with open(os.path.join(ASSETS, "objects", "plate", "plate_meta.json")) as f:
-        pm = json.load(f)
-    me = spec.add_mesh()
-    me.name = "plate_vis"
-    me.file = "objects/plate/plate.obj"
-    mm = spec.add_material()
-    mm.name = "plate_mat"
-    mm.rgba = pm["rgba"]
-    mm.specular = 0.25
-    mm.shininess = 0.35
+    if not pick_cube:
+        with open(os.path.join(ASSETS, "objects", "plate", "plate_meta.json")) as f:
+            pm = json.load(f)
+        me = spec.add_mesh()
+        me.name = "plate_vis"
+        me.file = "objects/plate/plate.obj"
+        mm = spec.add_material()
+        mm.name = "plate_mat"
+        mm.rgba = pm["rgba"]
+        mm.specular = 0.25
+        mm.shininess = 0.35
 
     wb = spec.worldbody
 
@@ -309,6 +330,13 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     l2.dir = list(-np.array([1.5, -1.0, 2.0]) / np.linalg.norm([1.5, -1.0, 2.0]))
     l2.diffuse = [0.16, 0.16, 0.16]
     l2.castshadow = False
+    lighting = appearance.get("lighting", {})
+    if lighting:
+        spec.visual.headlight.ambient = lighting["ambient"]
+        spec.visual.headlight.diffuse = [0, 0, 0]
+        l.diffuse = lighting["key"]
+        l.dir = lighting["direction"]
+        l2.diffuse = lighting["fill"]
 
     # ---------------- floor + table ----------------
     tb = cfg["rig"]["table"]
@@ -327,13 +355,23 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     cx = 0.5 * (tb["x_min"] + tb["x_max"])
     sx = 0.5 * (tb["x_max"] - tb["x_min"])
     sy = float(tb["half_width"])
-    gtop = _add_box(table, "table_top", [sx, sy, th / 2], [cx, 0.0, -th / 2], material="maple")
+    gtop = _add_box(table, "table_top", [sx, sy, th / 2], [cx, 0.0, -th / 2],
+                    material="table_custom" if table_look else "maple")
     gtop.friction = [float(phys.get("table_friction", 0.8)), 0.005, 0.0001]
     leg_h = (table_h - th) / 2
     for i, (lx, ly) in enumerate([(tb["x_min"] + 0.06, sy - 0.06), (tb["x_min"] + 0.06, -sy + 0.06),
                                   (tb["x_max"] - 0.06, sy - 0.06), (tb["x_max"] - 0.06, -sy + 0.06)]):
         _add_box(table, f"table_leg{i}", [0.025, 0.025, leg_h], [lx, ly, -th - leg_h],
                  material="frame_black", collide=False)
+    for i, marker in enumerate(appearance.get("markers", [])):
+        for axis in (0, 1):
+            size = [0.002, 0.014, 0.00015] if axis == 0 else [0.014, 0.002, 0.00015]
+            _add_box(table, f"marker_{i}_{axis}", size, [*marker, 0.0002],
+                     rgba=[0.025, 0.025, 0.025, 1], collide=False)
+    if appearance.get("wall"):
+        wall = appearance["wall"]
+        _add_box(wb, "background_wall", [0.015, 2, 1], [wall["x"], 0, 0.8],
+                 rgba=wall["rgba"], collide=False)
 
     # ---------------- rig frame (visual): rail behind the camera's view frustum, brackets to the
     # arm bases, and the camera mast. Nothing of it is visible from the policy camera.
@@ -367,10 +405,18 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     c.pos = list(cam_p)
     c.quat = _quat_wxyz(R_cam @ np.diag([1.0, -1.0, -1.0]))
     c.fovy = cam.fovy_deg
+    if cfg.get("camera_intrinsics"):
+        c.resolution = [cam.width, cam.height]
+        c.sensor_size = [cam.width / 1000, cam.height / 1000]
+        c.focal_pixel = [cam.fx, cam.fy]
+        c.principal_pixel = [cam.cx - cam.width / 2, cam.height / 2 - cam.cy]
 
     # a few nice viewing cameras for videos
-    for name, pos, look in [("front_view", [1.45, -0.55, 0.62], [0.42, 0.0, 0.05]),
-                            ("side_view", [0.55, -1.25, 0.55], [0.45, 0.0, 0.05]),
+    # Face the arm straight across the table, inside pick-cube's background wall.
+    front = ([0.28, 1.00, 0.65], [0.28, -0.20, 0.16]) if pick_cube else ([1.45, -0.55, 0.62], [0.42, 0.0, 0.05])
+    side = ([0.85, 0.85, 1.10], [0.34, -0.02, 0.08]) if pick_cube else ([0.55, -1.25, 0.55], [0.45, 0.0, 0.05])
+    for name, pos, look in [("front_view", *front),
+                            ("side_view", *side),
                             ("top_view", [0.50, 0.0, 1.35], [0.45, 0.0, 0.0])]:
         cc = wb.add_camera()
         cc.name = name
@@ -400,7 +446,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         # soft-bread proxy: real bread deforms around the fingers and gives a form-closure
         # grip even when pinched near its top. Rigid sim bread cannot, so each finger gets an
         # adhesion actuator that the driver switches on only while the gripper is closed.
-        gain = 0.0 if soft else float(phys.get("finger_adhesion", 0.0))
+        gain = 0.0 if soft or pick_cube else float(phys.get("finger_adhesion", 0.0))
         if gain > 0:
             for fb in robot.finger_bodies:
                 act = spec.add_actuator()
@@ -412,8 +458,8 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
 
     # ---------------- objects ----------------
     sc = cfg["scene"]
-    breads = _breads(cfg, mode, sides)
-    plate_pose = sc["single"]["plate"] if mode == "single" else sc["plate"]
+    breads = {} if pick_cube else _breads(cfg, mode, sides)
+    plate_pose = None if pick_cube else (sc["single"]["plate"] if mode == "single" else sc["plate"])
 
     bm = phys.get("bread_mass", {})
     bf = phys.get("bread_friction", [1.0, 0.01, 0.0005])
@@ -421,7 +467,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
                "solref": list(phys.get("bread_solref", [0.004, 1.0])),
                "solimp": list(phys.get("bread_solimp", [0.9, 0.95, 0.001, 0.5, 2.0])),
                "priority": int(phys.get("bread_priority", 1)), "solmix": float(phys.get("bread_solmix", 1.0))}
-    obj_meta = {}
+    obj_meta = _add_pick_cube(spec, wb, sc["objects"]) if pick_cube else {}
     for s, bd in breads.items():
         kind = bd["type"]
         x, y, yaw = bd["pose"]
@@ -479,55 +525,56 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         if scl != 1.0:
             obj_meta[f"bread_{s}"]["scale"] = scl
 
-    # plate: visual lathe mesh + primitive collision (flat well + tilted rim ring)
-    px, py, pyaw = plate_pose
-    pb = wb.add_body()
-    pb.name = "plate"
-    pb.pos = [px, py, 0.0005]
-    pb.quat = yaw_quat(pyaw)
-    fj = pb.add_freejoint()
-    fj.name = "plate_free"
-    g = pb.add_geom()
-    g.name = "plate_vis"
-    g.type = mujoco.mjtGeom.mjGEOM_MESH
-    g.meshname = "plate_vis"
-    g.material = "plate_mat"
-    g.group = G_OBJECT
-    g.contype = 0
-    g.conaffinity = 0
-    g.density = 0
-    Rr, H, rw, tt, fh = pm["R"], pm["H"], pm["r_well"], pm["t"], pm["foot_h"]
-    gw = pb.add_geom()
-    gw.name = "plate_well"
-    gw.type = mujoco.mjtGeom.mjGEOM_CYLINDER
-    gw.size = [rw + 0.004, (fh + tt) / 2, 0]
-    gw.pos = [0, 0, (fh + tt) / 2]
-    gw.group = G_COLLISION
-    gw.rgba = [0, 0, 1, 0]
-    n_seg = 28
-    z0, z1 = fh + tt, H
-    slope = np.arctan2(z1 - z0, Rr - rw)
-    L = np.hypot(Rr - rw, z1 - z0)
-    r_mid = 0.5 * (Rr + rw)
-    half_w = np.pi * r_mid / n_seg + 0.002
-    for i in range(n_seg):
-        a = 2 * np.pi * i / n_seg
-        Rm = R.from_euler("zy", [a, -slope]).as_matrix()
-        gr = pb.add_geom()
-        gr.name = f"plate_rim{i}"
-        gr.type = mujoco.mjtGeom.mjGEOM_BOX
-        gr.size = [L / 2, half_w, 0.0025]
-        gr.pos = [r_mid * np.cos(a), r_mid * np.sin(a), 0.5 * (z0 + z1) - 0.0025]
-        gr.quat = _quat_wxyz(Rm)
-        gr.group = G_COLLISION
-        gr.rgba = [0, 0, 1, 0]
-    plate_vol = np.pi * (rw + 0.004) ** 2 * (fh + tt) + n_seg * (L * 2 * half_w * 0.005)
-    for gg in pb.geoms:
-        if gg.name.startswith("plate_well") or gg.name.startswith("plate_rim"):
-            gg.density = float(phys.get("plate_mass", 0.45)) / plate_vol
-            if "plate_friction" in phys:             # plastic plate (MuJoCo default 1 otherwise)
-                gg.friction = [float(phys["plate_friction"]), 0.005, 0.0001]
-    obj_meta["plate"] = {"kind": "plate", "R": Rr, "H": H}
+    if not pick_cube:
+        # plate: visual lathe mesh + primitive collision (flat well + tilted rim ring)
+        px, py, pyaw = plate_pose
+        pb = wb.add_body()
+        pb.name = "plate"
+        pb.pos = [px, py, 0.0005]
+        pb.quat = yaw_quat(pyaw)
+        fj = pb.add_freejoint()
+        fj.name = "plate_free"
+        g = pb.add_geom()
+        g.name = "plate_vis"
+        g.type = mujoco.mjtGeom.mjGEOM_MESH
+        g.meshname = "plate_vis"
+        g.material = "plate_mat"
+        g.group = G_OBJECT
+        g.contype = 0
+        g.conaffinity = 0
+        g.density = 0
+        Rr, H, rw, tt, fh = pm["R"], pm["H"], pm["r_well"], pm["t"], pm["foot_h"]
+        gw = pb.add_geom()
+        gw.name = "plate_well"
+        gw.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+        gw.size = [rw + 0.004, (fh + tt) / 2, 0]
+        gw.pos = [0, 0, (fh + tt) / 2]
+        gw.group = G_COLLISION
+        gw.rgba = [0, 0, 1, 0]
+        n_seg = 28
+        z0, z1 = fh + tt, H
+        slope = np.arctan2(z1 - z0, Rr - rw)
+        L = np.hypot(Rr - rw, z1 - z0)
+        r_mid = 0.5 * (Rr + rw)
+        half_w = np.pi * r_mid / n_seg + 0.002
+        for i in range(n_seg):
+            a = 2 * np.pi * i / n_seg
+            Rm = R.from_euler("zy", [a, -slope]).as_matrix()
+            gr = pb.add_geom()
+            gr.name = f"plate_rim{i}"
+            gr.type = mujoco.mjtGeom.mjGEOM_BOX
+            gr.size = [L / 2, half_w, 0.0025]
+            gr.pos = [r_mid * np.cos(a), r_mid * np.sin(a), 0.5 * (z0 + z1) - 0.0025]
+            gr.quat = _quat_wxyz(Rm)
+            gr.group = G_COLLISION
+            gr.rgba = [0, 0, 1, 0]
+        plate_vol = np.pi * (rw + 0.004) ** 2 * (fh + tt) + n_seg * (L * 2 * half_w * 0.005)
+        for gg in pb.geoms:
+            if gg.name.startswith("plate_well") or gg.name.startswith("plate_rim"):
+                gg.density = float(phys.get("plate_mass", 0.45)) / plate_vol
+                if "plate_friction" in phys:             # plastic plate (MuJoCo default 1 otherwise)
+                    gg.friction = [float(phys["plate_friction"]), 0.005, 0.0001]
+        obj_meta["plate"] = {"kind": "plate", "R": Rr, "H": H}
 
     # ---------------- write ----------------
     os.makedirs(os.path.join(ASSETS, "scenes"), exist_ok=True)
@@ -536,7 +583,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
     if out_name is None:
         import hashlib
         h = hashlib.sha1(xml.encode()).hexdigest()[:10]
-        out_name = f"serve_bread_{robot.name}_{mode}_{h}.xml"
+        out_name = f"{task}_{robot.name}_{mode}_{h}.xml"
     xml_path = os.path.join(ASSETS, out_name)   # sits at the assets root -> relative asset paths
     if not os.path.exists(xml_path):
         tmp = f"{xml_path}.{os.getpid()}.tmp"
@@ -556,7 +603,59 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
         "image_size": [cam.height, cam.width],
         "nq": int(model.nq),
     }
+    if pick_cube:
+        meta["object_roles"] = {role: [n for n, obj in sc["objects"].items() if obj["role"] == role]
+                                for role in ("obj1", "obj2")}
     return xml_path, meta
+
+
+def _add_pick_cube(spec, worldbody, objects: dict) -> dict:
+    meta = {}
+    for name, obj in objects.items():
+        size = np.asarray(obj["size"], dtype=float)
+        if size.shape != (3,) or np.any(size <= 0):
+            raise ValueError(f"scene.objects.{name}.size must contain three positive lengths")
+        half = size / 2
+        x, y, yaw = obj["pose"]
+        body = worldbody.add_body()
+        body.name = name
+        body.pos = [x, y, half[2] + 0.0008]
+        body.quat = yaw_quat(yaw)
+        body.add_freejoint().name = f"{name}_free"
+        if obj["kind"] == "container":
+            wall = float(obj["wall"])
+            if not 0 < wall < min(half):
+                raise ValueError(f"scene.objects.{name}.wall must be positive and smaller than half its size")
+            hx, hy, hz = half
+            if obj.get("shape") == "rounded":
+                from .container import add_rounded_container
+                add_rounded_container(spec, body, obj)
+                meta[name] = {"kind": obj["kind"], "extents": size.tolist(), "role": obj["role"]}
+                continue
+            parts = [("bottom", [hx, hy, wall / 2], [0, 0, -hz + wall / 2])]
+            for sign in (-1, 1):
+                parts.append((f"x{sign}", [wall / 2, hy, hz - wall / 2],
+                              [sign * (hx - wall / 2), 0, wall / 2]))
+                parts.append((f"y{sign}", [hx - wall, wall / 2, hz - wall / 2],
+                              [0, sign * (hy - wall / 2), wall / 2]))
+        elif obj["kind"] == "cube":
+            parts = [("box", half, [0, 0, 0])]
+        else:
+            raise ValueError(f"Unsupported pick_cube prop kind: {obj['kind']}")
+        volume = sum(8 * np.prod(half_size) for _, half_size, _ in parts)
+        for suffix, half_size, pos in parts:
+            geom = _add_box(body, f"{name}_{suffix}", half_size, pos, rgba=obj["rgba"], group=G_OBJECT)
+            geom.density = float(obj["mass"]) / volume
+            geom.friction = obj["friction"]
+            if obj.get("specular") is not None:
+                material = spec.add_material()
+                material.name = f"{name}_{suffix}_material"
+                material.rgba = obj["rgba"]
+                material.specular = float(obj["specular"])
+                material.shininess = float(obj.get("shininess", 0.2))
+                geom.material = material.name
+        meta[name] = {"kind": obj["kind"], "extents": size.tolist(), "role": obj["role"]}
+    return meta
 
 
 def _breads(cfg: dict, mode: str, sides: List[str]) -> Dict[str, dict]:

@@ -685,7 +685,7 @@ def mode_policy(log, cfg, scene, out_dir, report, max_steps=40, sim_images=True)
     from humanego_sim.runner import EpisodeRunner, T_ALIGN_ARIA
     from humanego_sim.driver import T_to_p
     from humanego_sim.perception import SideObjects, SimPerception
-    from interfaces import ObjectState
+    from inference.data_types import ObjectState
     runner = EpisodeRunner(cfg)
     pol, env = runner.policy, runner.env
     K = np.asarray(log["meta"]["camera"]["K"], dtype=np.float64)

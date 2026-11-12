@@ -89,6 +89,7 @@ class SimController:
         # ellipse of the perceived half length / width, to fit the hand's opening minus yaw_margin), at most
         # yaw_max_deg; closing then also waits for the orientation (arrive_rot_deg)
         self.ga_yaw = str(ga.get("yaw", "off"))
+        self.ga_orientation_world = ga.get("orientation_world_rpy_deg")
         self.ga_yaw_max = np.radians(float(ga.get("yaw_max_deg", 60.0)))
         self.ga_yaw_margin = float(ga.get("yaw_margin", 0.01))
         robot = getattr(next(iter(arms.values()), None), "robot", None)
@@ -230,7 +231,10 @@ class SimController:
         pw2 = c + s_a * a + s_w * w + s_u * up
         out = p_cam.copy()
         out[:3] = Tcw[:3, :3].T @ (pw2 - Tcw[:3, 3])
-        if self.ga_yaw != "off":
+        if self.ga_orientation_world is not None:
+            rotation = R.from_euler("xyz", self.ga_orientation_world, degrees=True).as_matrix()
+            out[3:] = R.from_matrix(Tcw[:3, :3].T @ rotation).as_rotvec()
+        elif self.ga_yaw != "off":
             out[3:] = self._yaw_fix(g, out[3:])
         return out
 
@@ -312,7 +316,7 @@ class SimController:
             else:
                 timed_out = self.t - gs["t0"] > self.ga_timeout
             arrived = err < self.ga_tol
-            if arrived and self.ga_yaw != "off":                 # the hand must have turned too
+            if arrived and (self.ga_yaw != "off" or self.ga_orientation_world is not None):
                 arrived = (R.from_rotvec(gs["target"][3:]) * R.from_rotvec(actual[3:]).inv()).magnitude() < self.ga_rot_tol
             if arrived or timed_out:
                 gs.update(state="closing", t0=self.t)

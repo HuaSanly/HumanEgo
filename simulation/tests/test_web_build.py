@@ -196,6 +196,25 @@ def test_manifest_validation_catches_errors(tmp_path):
     assert any("missing" in e for e in errs)
 
 
+def test_adding_scene_preview_keeps_policy_config_and_results(tmp_path, monkeypatch):
+    import build_web
+    from humanego_sim.env import load_config
+    monkeypatch.setattr(build_web, "WEB", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    bread = _configs()[0]
+    objects = load_config(os.path.join(SIM, "configs", "pick_cube.yaml"))["scene"]["objects"]
+    preview = {"robot": bread["robot"], "camera": bread["camera"], "mode": bread["mode"],
+               "task": "pick_cube", "scene_only": True, "model": "pick_cube_preview", "objects": objects,
+               "rollouts": [{"id": "pick_cube_preview_000", "success": None, "per_side": {},
+                             "scene": {n: o["pose"] for n, o in objects.items()}}]}
+    before = build_web.write_manifest([bread])
+    after = build_web.write_manifest([preview])
+    assert len(after["configs"]) == 2
+    assert after["summary"] == before["summary"]
+    assert after["default"]["task"] == "serve_bread"
+    assert web_manifest.validate(after) == []
+
+
 def test_tuning_section_from_run(tmp_path):
     run = tmp_path / "soft_vX"
     (run / "iterations").mkdir(parents=True)

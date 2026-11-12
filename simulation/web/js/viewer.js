@@ -244,7 +244,7 @@ export class SimViewer {
       obj.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       const b = bodies[g.body];
       b.grp.add(holder);
-      if (b.name.startsWith('bread_') || b.name === 'plate') this.objectBodies[b.name] = b;
+      if (b.name in model.objects) this.objectBodies[b.name] = b;
       if (b.name.includes('gripper')) { obj.userData.gripper = true; }
     }
     // soft breads: a deformable GLB in a group that carries the bread's rigid frame

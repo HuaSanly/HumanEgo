@@ -1,0 +1,28 @@
+# Rectified K from stereo_raw_calibration.yaml: stereoRectify, alpha=0, ZERO_DISPARITY.
+# Must match the client maps and transmitted 640x480 RGB images.
+image_size_hw:
+- 480
+- 640
+rectified: true
+left:
+  K:
+  - - 238.05677433637493
+    - 0.0
+    - 319.41796112060547
+  - - 0.0
+    - 238.05677433637493
+    - 239.94449996948242
+  - - 0.0
+    - 0.0
+    - 1.0
+right:
+  K:
+  - - 238.05677433637493
+    - 0.0
+    - 319.41796112060547
+  - - 0.0
+    - 238.05677433637493
+    - 239.94449996948242
+  - - 0.0
+    - 0.0
+    - 1.0

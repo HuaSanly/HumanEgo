@@ -3,9 +3,11 @@
 Closed-loop simulation of the **released HumanEgo `serve_bread` policy** on a physics
 replica of the real deployment rig: two Trossen WidowX AI arms and a top-mounted
 Intel RealSense D405, placed by the **real hand-eye calibration**. The network is never
-touched — the simulator plugs into the same `Camera` / `RobotArm` / `Perception`
-contract as [`inference/`](../inference/README.md) and runs the released `ICTPolicy` on
-the released checkpoint.
+touched — the simulator shares [`inference/policy.py`](../inference/policy.py)'s
+`ICTPolicy` and `ObjectState` with the new remote-serving scaffold. Its original
+RGB-D lifting helpers and camera configuration live in
+`humanego_sim/legacy_inference/`; the remote-serving scaffold does not own hardware
+drivers. The simulation policy and controller behavior are unchanged.
 
 **Interactive page:** <https://humanego-ai.github.io/sim/> — replay pre-computed rollouts
 in 3D, or switch to **Live** and run the policy *in your browser* (MuJoCo WebAssembly +
@@ -41,6 +43,105 @@ python simulation/scripts/run_episode.py --mode single --set control.alpha=0.3
 ```
 
 Headless rendering uses `MUJOCO_GL=egl` (set automatically).
+
+## pick_cube scene
+
+`configs/pick_cube.yaml` is the standalone configuration for a blue open plastic
+container (`obj1`) and a red rigid block (`obj2`), matching
+`cfg/preprocess/tasks/pick_cube.yaml`. It contains the fixed D scene, robot rig,
+table, camera calibration, appearance, physics, perception and grasp controller;
+it does not inherit `serve_bread.yaml` or another YAML. Prop dimensions, masses,
+friction and initial `[x, y, yaw_deg]` poses are editable under `scene.objects`.
+The default container has rounded, tapered collision walls; dimensions were
+estimated from training data and have not been confirmed by physical measurements.
+
+The default is a **closed-loop run of your trained pick_cube model**, using
+`runs/pick_cube/server_0.1/latest.pt` and the `config.json` / `dataset_stats.json`
+next to it. It uses the right arm, as in training (`single_hand: true`,
+`absolute` actions). The checkpoint's `config.json` selects `camera_frame` or
+`anchor_frame` automatically; do not change this flag to reinterpret trained weights.
+No public model download is needed. Perception-guided grasp assistance overwrites
+the grasp point and orientation, waits before closing, and permits one retry.
+The existing 5 cm automatic lift is explicit under `control.forced_lift_*`.
+Bread physics and plate-based idle completion are omitted. Success requires
+the grasped block to be released, settled and fully inside the container.
+The optional `control.release_assist` is enabled in the active pick_cube config.
+At 10 Hz it checks true rigid-body poses, cube contacts with both finger pads,
+the complete oriented block's gravity-drop path into the rounded/tapered cavity,
+and low block/hand velocity relative to the container. The drop region has a
+5 mm interior margin and the block's lowest point must be at most 8 cm above
+the rim. After these conditions hold continuously for 1 s of simulation time
+while the policy still commands closed, the runner halts the hand, mutes policy
+control and opens the gripper. Leaving the region, losing contact, excessive
+motion or a policy open command resets the timer. A tilted container (>5 degrees)
+is excluded. This uses simulator ground truth, not deployable perception.
+
+The assist waits for the measured gripper opening, then requires 0.5 s of
+continuously successful placement before going home (up to 2 s for settling).
+It triggers at most once per episode and cannot be overridden by late policy
+commands or re-grasping. A release that starts before the episode time limit
+gets bounded extra time for this sequence. Triggering is not itself success:
+normal physical placement checks still apply, and failure to open is a failure.
+`meta.result.per_side.right.release_assist` in `episode.json` records the settings,
+trigger time, wait duration, last blocking reason and outcome (`placed`,
+`open_timeout`, `settle_timeout` or `not_triggered`). The generic default is off;
+serve_bread is unchanged. To compare with the unassisted policy:
+
+```bash
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml \
+  --set control.release_assist.enabled=false --seed 0 --video --out pick_cube_no_release_assist
+```
+
+Historical A–E and grasp-study configs remain frozen under `simulation/runs/`;
+active pick_cube parameters are maintained only in `configs/pick_cube.yaml`.
+
+```bash
+# Activate an environment containing the project's simulation dependencies.
+conda activate GlassEgo
+python simulation/scripts/build_assets.py --table-only
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml --video --out pick_cube_model
+
+# Choose a different checkpoint and inference settings. --set values use JSON syntax.
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml \
+  --set 'policy.ckpt="./runs/pick_cube/HumanEgo/latest.pt"' \
+  --set policy.num_inference_steps=20 --set control.policy_period=0.3 \
+  --set control.max_episode_time=40 --device cuda --seed 0 --video
+
+# Use an anchor-frame checkpoint directly from GlassEgo (no model copying).
+python simulation/scripts/run_episode.py --config simulation/configs/pick_cube.yaml \
+  --set 'policy.ckpt="~/GlassEgo/runs/Block Jamming real gournd/new_03/latest.pt"' \
+  --set policy.num_inference_steps=10 --video --out pick_cube_anchor
+
+# Run the trained model and export its rollout for the web viewer.
+python simulation/scripts/build_web.py --config simulation/configs/pick_cube.yaml
+python simulation/web/tools/serve.py 8791 simulation/web
+```
+
+Open `http://127.0.0.1:8791/?task=pick_cube&mode=single` and press **Replay** to
+view the trained policy's predictions, input images and actual physics outcome.
+This is recorded Python inference; browser ONNX Live inference is not enabled
+for pick_cube. Videos and episode logs are in `simulation/runs/<out>/`.
+`--profile production` is the default; `tuned` profiles belong to serve_bread
+and are rejected for pick_cube. Use `--set` for your own inference/controller
+parameters. Same-seed reruns are intended for reproducing a run; task success
+must be measured rather than inferred from a model loading successfully.
+
+For `anchor_frame`, each side freezes its own initial perceived `obj1` pose as
+the reference, matching training's `virtual_static_anchor`. In pick_cube this is
+the blue container. ICT object poses can still update independently; the reference
+used to encode geometry and decode trajectories stays fixed throughout the episode.
+Left-arm perception already supplies a mirrored reference, so it is not mirrored
+again. Missing anchors, fewer than three finite 3D keypoints or invalid reference
+matrices stop the run instead of falling back to camera coordinates. `camera_frame`
+retains its existing input and decoding path. Both modes retain the existing
+gripper decoding, grasp assistance, physics and controller settings, and require
+absolute actions. Anchor-frame support covers Python inference and recorded
+replay, not browser ONNX Live inference.
+
+For geometry inspection only, add `--set scene_only=true --duration 5`; it skips
+the policy. Physics-only previews can also be built with
+`build_web.py --config simulation/configs/pick_cube.yaml --set scene_only=true`.
+Those retain the **Live physics** prop editor and may use either arm mode.
 
 ## Results
 

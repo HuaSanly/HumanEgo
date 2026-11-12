@@ -9,7 +9,7 @@ robot, using the *released* modules of this repo:
     masks        ground-truth segmentation       (replaces DINO-SAM; same output)
     split        connected components at split_x (shared_context: only obj1 is split)
     keypoints    preprocess/KptsSelector          (20 equidistant contour points)
-    3D lift      inference/CamRS.lift3d_for_multi_frames over N noisy depth frames
+    3D lift      retained CamRS.lift3d_for_multi_frames over N noisy depth frames
     filtering    postprocess_kpts_3d              (MAD gate + DBSCAN, ported)
     pose         preprocess/OrientAnything.estimate_frame_pca1
     mirroring    utils/utils_math.mirror_pose     (left arm sees a flipped world)
@@ -50,11 +50,11 @@ from preprocess.KptsSelector import KeypointsSelectorEngine  # noqa: E402
 from preprocess.OrientAnything import estimate_frame_pca1  # noqa: E402
 from preprocess.VisualKpts import VisualKptsEngine  # noqa: E402
 from utils.utils_math import mirror_intrinsics, mirror_pose  # noqa: E402
-from inference.CamRS import CamRS  # noqa: E402
+from .legacy_inference.CamRS import CamRS  # noqa: E402
 from utils.utils_io import load_cfg  # noqa: E402
 
 CFG_BASE = os.path.join(REPO_ROOT, "cfg", "preprocess", "base")
-CAM_CFG = os.path.join(REPO_ROOT, "cfg", "inference", "example_dualarm", "CamRS.yaml")
+CAM_CFG = os.path.join(os.path.dirname(__file__), "legacy_inference", "cfg", "CamRS.yaml")
 
 
 def _make_lifter() -> CamRS:
@@ -201,6 +201,8 @@ class SimPerception:
         mn = self.mask_noise
         if mn is not None:
             gt = {name: mn.instance(name, mk) for name, mk in gt.items()}
+        if self.env.cfg.get("task") == "pick_cube":
+            return self.env.object_role_masks(gt)
         obj1 = np.zeros((self.env.H, self.env.W), np.uint8)
         for name, mk in gt.items():
             if name.startswith("bread"):
@@ -358,7 +360,14 @@ class SimPerception:
         """Policy input image for one side (in that side's domain: flipped for the left arm)."""
         is_flip = side == "left"
         vis = cv2.flip(clean_bg, 1) if is_flip else clean_bg.copy()
-        active_K = self.K_flip if is_flip else self.K
+        draw_K = self.K.copy()
+        active_K = (self.K_flip if is_flip else self.K).copy()
+        resolution = self.env.cfg.get("appearance", {}).get("keypoint_resolution")
+        if resolution:
+            height, width = resolution
+            scale = np.diag([width / vis.shape[1], height / vis.shape[0], 1])
+            draw_K, active_K = scale @ draw_K, scale @ active_K
+            vis = cv2.resize(vis, (width, height), interpolation=cv2.INTER_LINEAR)
         self.visualkpts.reset_obj_counter()
         if draw_obj_kpts:
             for ok in so.objs_meta:
@@ -373,8 +382,10 @@ class SimPerception:
                 vis = self.visualkpts.process_single_obj(vis, np.stack([u, v], 1))
         if draw_arm_kpts:
             if is_flip:
-                tmp = self.visualkpts.process_single_gripper(cv2.flip(vis, 1), arm.get_p_in_cam(), is_grasp, self.K)
+                tmp = self.visualkpts.process_single_gripper(cv2.flip(vis, 1), arm.get_p_in_cam(), is_grasp, draw_K)
                 vis = cv2.flip(tmp, 1)
             else:
-                vis = self.visualkpts.process_single_gripper(vis, arm.get_p_in_cam(), is_grasp, self.K)
+                vis = self.visualkpts.process_single_gripper(vis, arm.get_p_in_cam(), is_grasp, draw_K)
+        if resolution:
+            vis = cv2.resize(vis, (clean_bg.shape[1], clean_bg.shape[0]), interpolation=cv2.INTER_AREA)
         return vis

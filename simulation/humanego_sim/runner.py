@@ -32,12 +32,12 @@ from .controller import SimController
 from .driver import T_to_p
 from .env import REPO_ROOT, ServeBreadSim
 from .perception import SideObjects, SimPerception, mirror_pose, split_mask_by_x
+from .release_assist import ReleaseAssist
 
-for _p in (os.path.join(REPO_ROOT, "inference"), REPO_ROOT):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-from interfaces import ObjectState  # noqa: E402  (released inference template)
-from policy import ICTPolicy  # noqa: E402
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from inference.data_types import ObjectState  # noqa: E402
+from inference.policy import ICTPolicy  # noqa: E402
 
 T_ALIGN_ARIA = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.float64)
 
@@ -62,6 +62,7 @@ class SideCtx:
     forced_lift_anchor_p_base: Optional[np.ndarray] = None
     pred_done_prob: float = 0.0
     done_reason: str = ""
+    reference_anchor: Optional[ObjectState] = None
 
 
 @dataclass
@@ -77,7 +78,7 @@ class EpisodeResult:
 
 def load_policy(cfg: dict, device: str = "cuda") -> ICTPolicy:
     pc = cfg["policy"]
-    ckpt = pc["ckpt"]
+    ckpt = os.path.expanduser(pc["ckpt"])
     if not os.path.isabs(ckpt):
         ckpt = os.path.normpath(os.path.join(REPO_ROOT, ckpt))
     torch.manual_seed(int(pc.get("seed", 0)))
@@ -87,12 +88,18 @@ def load_policy(cfg: dict, device: str = "cuda") -> ICTPolicy:
 class EpisodeRunner:
     def __init__(self, cfg: dict, policy: Optional[ICTPolicy] = None, device: str = "cuda",
                  env: Optional[ServeBreadSim] = None):
+        if cfg.get("scene_only"):
+            raise ValueError("This config is a scene preview; use scripts/run_episode.py --config <path> "
+                             "to record physics without the serve_bread policy or success metric")
         self.cfg = cfg
+        self.task = cfg.get("task", "serve_bread")
+        if self.task == "pick_cube" and cfg.get("mode") != "single":
+            raise ValueError("pick_cube has one cube and uses the trained right-hand policy; choose --mode single")
         self.device = device
         self.env = env or ServeBreadSim(cfg)
         self.policy = policy or load_policy(cfg, device)
-        if self.policy.frame_mode != "camera_frame" or self.policy.action_mode != "absolute":
-            raise NotImplementedError("sim runner currently supports camera_frame + absolute checkpoints")
+        if self.policy.frame_mode not in ("camera_frame", "anchor_frame") or self.policy.action_mode != "absolute":
+            raise NotImplementedError("sim runner supports camera_frame or anchor_frame + absolute checkpoints")
         cc = cfg["control"]
         self.cc = cc
         self.T_align = T_ALIGN_ARIA
@@ -110,6 +117,26 @@ class EpisodeRunner:
         # parity trace (scripts/parity_test.py): when a dict, run() records the physics state at t = 0
         # and at every control tick, the perception, every policy call and every controller command
         self.trace: Optional[dict] = None
+
+    def _manipulated_body(self, side: str) -> str:
+        return "cube" if self.task == "pick_cube" else f"bread_{side}"
+
+    def _static_reference_anchor(self, side: str, so: SideObjects) -> ObjectState:
+        label = f"anchor_frame: {side} anchor '{self.anchor_key}'"
+        meta = so.objs_meta.get(self.anchor_key)
+        if meta is None or self.anchor_key not in so.dynamic_obj_poses:
+            raise ValueError(f"{label} is missing from the initial perception")
+        points = np.asarray(meta.get("kpts_3d", []), dtype=float)
+        if (points.ndim != 2 or points.shape[1] != 3
+                or np.isfinite(points).all(axis=1).sum() < 3):
+            raise ValueError(f"{label} needs at least three finite 3D keypoints")
+        T = np.array(so.T_anchor_in_cam_static, dtype=float, copy=True)
+        if (T.shape != (4, 4) or not np.isfinite(T).all()
+                or not np.allclose(T[3], [0, 0, 0, 1], atol=1e-6)
+                or not np.allclose(T[:3, :3].T @ T[:3, :3], np.eye(3), atol=1e-5)
+                or not np.isclose(np.linalg.det(T[:3, :3]), 1.0, atol=1e-5)):
+            raise ValueError(f"{label} has an invalid static pose matrix")
+        return ObjectState(T)
 
     # ------------------------------------------------------------------
     def _seed_policy_noise(self, seed: int):
@@ -131,7 +158,7 @@ class EpisodeRunner:
                 "ee": arm.get_p_in_cam().tolist(), "g_to": float(arm._g_to), "g_cmd": float(arm.g_cmd),
                 "skill": gs["state"], "tries": int(gs["tries"]), "wrap": ctxs[s].wrap_phase if s in ctxs else None,
                 "grasping": bool(ctxs[s].hand["is_grasping"]) if s in ctxs else False,
-                "n_events": len(controller.events[s]), "bread": env.object_pos(f"bread_{s}").tolist(),
+                "n_events": len(controller.events[s]), "bread": env.object_pos(self._manipulated_body(s)).tolist(),
                 "goal": arm.cinterp.p_goal.tolist(), "mode": arm.mode}
         return out
 
@@ -146,6 +173,11 @@ class EpisodeRunner:
     def _perceived_geometry(self, side: str, so) -> dict:
         """What the robot knows about the scene from its own perception at t = 0 (world frame):
         bread centre / long axis / extent from its keypoints, and a place height over the plate."""
+        pick_cube = self.task == "pick_cube"
+        if pick_cube:
+            assist = self.cc.get("grasp_assist", {})
+            if not (assist.get("enabled") and assist.get("refine", True)):
+                return {}
         env, out = self.env, {}
         Tcw = env.T_cam_in_world
         pts = {}
@@ -155,7 +187,7 @@ class EpisodeRunner:
                 T, kl = mirror_pose(T), kl * np.array([-1.0, 1.0, 1.0])
             pc = (T[:3, :3] @ kl.T).T + T[:3, 3]
             pts[key] = (Tcw[:3, :3] @ pc.T).T + Tcw[:3, 3]
-        b = pts.get(self.anchor_key)
+        b = pts.get("obj2" if pick_cube else self.anchor_key)
         if b is not None and len(b) >= 3:
             c = b.mean(0)
             # centre height: the contour keypoints lie on the visible upper surface, so their mean sits
@@ -170,6 +202,10 @@ class EpisodeRunner:
             w = np.array([-a[1], a[0], 0.0])
             out["bread"] = {"c": c.tolist(), "a": a.tolist(), "half_len": float(np.abs(xy @ a2).max()),
                             "half_wid": float(np.abs(xy @ w[:2]).max())}
+            if pick_cube:
+                # The existing grasp controller uses this legacy key for its pinch geometry.
+                # Derive it from perceived obj2 points, never the simulated body's true pose.
+                return out
             plate = pts.get("obj2")
             # place height: bread centre height on the table + the plate's floor (rim keypoints - 1.35 cm)
             floor = float(plate[:, 2].mean()) - 0.0135 if plate is not None else 0.0085
@@ -258,11 +294,60 @@ class EpisodeRunner:
             pb[2] += bias
         return arm.p_in_base_to_p_in_cam(pb)
 
+    def _start_assisted_release(self, ctx: SideCtx, controller: SimController, t: float):
+        """Take ownership before opening so stale policy chunks cannot close the hand."""
+        side, arm = ctx.side, self.env.arms[ctx.side]
+        controller.muted[side] = True
+        controller.clear(side)
+        controller.reperceive[side] = None
+        ctx.forced_lift_counter = 0
+        ctx.hand.update(is_grasping=False, latched_obj=None, T_lock_h2obj=None)
+        ctx.is_done, ctx.done_reason = True, "release_assist"
+        ctx.wrap_phase, ctx.wrap_t0 = "assist_open", t
+        arm.move_p(arm.get_p(), duration=0.05)
+        arm.open_gripper(goal_time=controller.open_goal_time)
+        controller.events[side].append((round(t, 2), "release_assist:open"))
+
+    def _advance_assisted_release(self, ctx: SideCtx, assist: ReleaseAssist,
+                                  controller: SimController, t: float):
+        arm = self.env.arms[ctx.side]
+        elapsed = t - ctx.wrap_t0
+        if ctx.wrap_phase == "assist_open":
+            if elapsed >= controller.open_goal_time and arm.get_gripper_q() >= 0.9:
+                ctx.wrap_phase, ctx.wrap_t0 = "assist_settle", t
+                ctx.hand["has_released"] = True
+                assist.outcome = "settling"
+            elif elapsed >= controller.open_goal_time + assist.settle_timeout:
+                assist.outcome = "open_timeout"
+            else:
+                return
+        elif ctx.wrap_phase == "assist_settle":
+            if self.evaluate({ctx.side: ctx})[ctx.side]["success"]:
+                if assist.settled_since is None:
+                    assist.settled_since = t
+            else:
+                assist.settled_since = None
+            if assist.settled_since is not None and t - assist.settled_since >= 0.5 - 1e-9:
+                assist.outcome = "placed"
+            elif elapsed >= assist.settle_timeout:
+                assist.outcome = "settle_timeout"
+            else:
+                return
+        else:
+            return
+        if assist.outcome in ("placed", "open_timeout", "settle_timeout"):
+            controller.events[ctx.side].append((round(t, 2), "release_assist:" + assist.outcome))
+            ctx.wrap_phase, ctx.wrap_t0 = "home", t
+            arm.go_home(duration=3.0)
+
     # ------------------------------------------------------------------
     def _run_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
-        """Port of Inference._run_side for camera_frame / absolute checkpoints."""
+        """Port of Inference._run_side for camera/anchor-frame absolute checkpoints."""
         env, pol, arm = self.env, self.policy, self.env.arms[ctx.side]
         so, st = ctx.objs, ctx.hand
+        reference_anchor = ctx.reference_anchor if pol.frame_mode == "anchor_frame" else None
+        if pol.frame_mode == "anchor_frame" and reference_anchor is None:
+            raise ValueError(f"anchor_frame: {ctx.side} static reference anchor was not initialized")
         Tr = arm.get_T_ee_in_cam() @ self.T_align
         Tv = mirror_pose(Tr) if ctx.is_flip else Tr
         gv = self._grasp_val(arm)
@@ -278,6 +363,8 @@ class EpisodeRunner:
             ctx.forced_lift_anchor_p_base = arm.get_p()[:3].copy()
             best, bd = None, float("inf")
             for ok, To in so.dynamic_obj_poses.items():
+                if self.task == "pick_cube" and ok != "obj2":
+                    continue                  # obj1 is the fixed container, not the manipulated block
                 dd = float(np.linalg.norm(Tv[:3, 3] - To[:3, 3]))
                 if dd < bd:
                     best, bd = ok, dd
@@ -294,7 +381,7 @@ class EpisodeRunner:
             so.dynamic_obj_poses[st["latched_obj"]] = Tv @ st["T_lock_h2obj"]
 
         # ---- idle-done (release over the plate) ----
-        if self.cc.get("use_idle_done", False) and st["is_grasping"]:
+        if self.task != "pick_cube" and self.cc.get("use_idle_done", False) and st["is_grasping"]:
             if ctx.grasp_start_time is None:
                 ctx.grasp_start_time = t
             if t - ctx.grasp_start_time >= float(self.cc.get("idle_time_limit", 3.0)):
@@ -314,7 +401,11 @@ class EpisodeRunner:
         # ---- ICT + inference (released ICTPolicy) ----
         hs = pol.single_hand_side
         objs = {k: ObjectState(v.copy()) for k, v in so.dynamic_obj_poses.items()}
-        x_ict, mask = pol.build_ict({hs: Tv}, {hs: gv}, objs, self.anchor_key)
+        if pol.frame_mode == "anchor_frame":
+            x_ict, mask = pol.build_ict({hs: Tv}, {hs: gv}, objs, self.anchor_key,
+                                      reference_anchor=reference_anchor)
+        else:
+            x_ict, mask = pol.build_ict({hs: Tv}, {hs: gv}, objs, self.anchor_key)
         x_rgb = pol.prepare_image(vis)
         active_K = self.perception.K_flip if ctx.is_flip else self.perception.K
         a_uv = pol.compute_anchor_uv(ObjectState(so.dynamic_obj_poses.get(self.anchor_key, so.T_anchor_in_cam_static)),
@@ -338,13 +429,15 @@ class EpisodeRunner:
                 ctx.is_done = True
                 ctx.done_reason = "policy_done"
 
-        # ---- decode (camera_frame, absolute) ----
+        # ---- decode (reference frame -> camera frame, absolute) ----
         he = min(int(self.cc.get("exec_horizon", pol.pred_horizon)), pol.pred_horizon)
         pos, o6d, grasp = traj[hs]
         raw, pT_world = [], []
         for k in range(he):
-            Tv_k = pol.decode_ee_in_cam(pos[k], o6d[k], None, self.T_align)   # hand(ref=cam) @ inv(T_align)
+            Tv_k = pol.decode_ee_in_cam(pos[k], o6d[k], reference_anchor, self.T_align)
             Treal = mirror_pose(Tv_k) if ctx.is_flip else Tv_k
+            if self.cc.get("target_offset_world"):
+                Treal[:3, 3] += env.T_world_in_cam[:3, :3] @ np.asarray(self.cc["target_offset_world"], float)
             pt = T_to_p(Treal)
             pt = self._apply_forced_lift(pt, arm, ctx.forced_lift_counter, ctx.forced_lift_anchor_p_base)
             if not np.any(np.isnan(pt)):
@@ -359,14 +452,15 @@ class EpisodeRunner:
         """Objects appear in mid-air one after another and fall onto the table under physics.
         Recorded with negative time stamps, before perception runs at t = 0."""
         env = self.env
-        names = ["plate"] + sorted(n for n in env.obj_names if n != "plate")
+        target = "container" if self.task == "pick_cube" else "plate"
+        names = [target] + sorted(n for n in env.obj_names if n != target)
         rest = {n: np.asarray(env.object_pose7(n)) for n in names}
         release = {n: 0.15 + 0.22 * i for i, n in enumerate(names)}
         air = {}
         for n in names:
             q = rest[n].copy()
-            q[2] += rng.uniform(*drop_h) if n != "plate" else 0.035
-            if n != "plate":   # a little tilt so the landing looks natural
+            q[2] += rng.uniform(*drop_h) if n != target else 0.035
+            if n != target:   # a little tilt so the landing looks natural
                 from scipy.spatial.transform import Rotation as R
                 r0 = R.from_quat([q[4], q[5], q[6], q[3]])
                 r1 = R.from_euler("xy", rng.uniform(-12, 12, 2), degrees=True) * r0
@@ -421,8 +515,14 @@ class EpisodeRunner:
                                     "T_anchor_static": np.asarray(so.T_anchor_in_cam_static, float).tolist()}
                                 for s, so in side_objs.items()}
         ctxs = {s: SideCtx(side=s, is_flip=(s == "left"), objs=side_objs[s]) for s in sides}
+        if self.policy.frame_mode == "anchor_frame":
+            for s, ctx in ctxs.items():
+                # Match training's virtual_static_anchor, even if the object moves later.
+                ctx.reference_anchor = self._static_reference_anchor(s, ctx.objs)
         ctxs["right"].is_active = True
         controller = SimController(env.arms, cc)
+        release_assists = ({s: ReleaseAssist(env, s, cc.get("release_assist", {}) or {}) for s in sides}
+                           if self.task == "pick_cube" else {})
         geoms = {s: self._perceived_geometry(s, side_objs[s]) for s in sides}
         for s in sides:
             if geoms[s].get("bread"):
@@ -439,6 +539,7 @@ class EpisodeRunner:
         P = float(cc.get("policy_period", 0.3))
         Tc = 1.0 / float(cc.get("control_freq", 10.0))
         T_max = float(cc.get("max_episode_time", 40.0))
+        deadline = T_max
         rec_dt = 1.0 / record_hz
         next_pol, next_ctl, next_rec = 0.0, 0.0, 0.0
         pending = None          # (deliver_time, payload) — inference latency
@@ -452,7 +553,7 @@ class EpisodeRunner:
                 os.makedirs(img_dir, exist_ok=True)
         n_pol = 0
 
-        while env.t < T_max:
+        while env.t < deadline:
             t = env.t
             if tr is not None and t >= next_ctl - 1e-9:
                 # state before the last physics step + the controls it ran with: replaying that one step
@@ -463,7 +564,9 @@ class EpisodeRunner:
             # ---- deliver the previous inference, then observe again ----
             if t >= next_pol - 1e-9:
                 if pending is not None:
-                    controller.update_target(*pending)
+                    rt, grasp = pending
+                    active = {s: chunk for s, chunk in rt.items() if not controller.muted[s]}
+                    controller.update_target(active, {s: grasp[s] for s in active})
                     pending = None
                 if not ctxs["right"].is_active:
                     ctxs["right"].is_active = True
@@ -520,6 +623,9 @@ class EpisodeRunner:
                             print(f"[sim] {s} done ({ctx.done_reason}) at t={t:.1f}s -> open + home")
             # ---- wrap-up sequencing (open -> home) ----
             for s, ctx in ctxs.items():
+                if ctx.wrap_phase in ("assist_open", "assist_settle"):
+                    self._advance_assisted_release(ctx, release_assists[s], controller, t)
+                    continue
                 rel = cc.get("release", {}) or {}
                 # Real wrap-up (AriaMimic inference/Inference.py, RobotArmTrossen.open_gripper(goal_time=1.0)):
                 # two arms (_wrap_up_side) halt, open blocking, then go_home(3.0); one arm (run) opens
@@ -566,6 +672,17 @@ class EpisodeRunner:
                     ctx.wrap_phase = "finished"
             # ---- controller ----
             if t >= next_ctl - 1e-9:
+                for s, assist in release_assists.items():
+                    ctx = ctxs[s]
+                    if ctx.is_active and not ctx.is_done and ctx.wrap_phase is None and t < T_max:
+                        if assist.update(t, controller.shared_grip[s] > controller.grasp_threshold):
+                            self._start_assisted_release(ctx, controller, t)
+                            # Only a release already triggered before the episode limit gets
+                            # bounded extra time to open, settle, go home and record the tail.
+                            deadline = max(deadline, t + controller.open_goal_time
+                                           + 2 * assist.settle_timeout + 3.1 + 0.6 + Tc)
+                            if verbose:
+                                print(f"[sim] {s} release assist at t={t:.1f}s -> open + settle + home")
                 controller.tick()
                 next_ctl += Tc
                 for s in sides:
@@ -583,7 +700,7 @@ class EpisodeRunner:
                 next_rec += rec_dt
             env.step()
             for s in sides:
-                bz = env.object_pos(f"bread_{s}")[2]
+                bz = env.object_pos(self._manipulated_body(s))[2]
                 if bz > self._bread_max_z.get(s, 0.0):
                     self._bread_max_z[s] = float(bz)
             if all(c.wrap_phase == "finished" for c in ctxs.values()):
@@ -600,6 +717,10 @@ class EpisodeRunner:
 
         per_side = self.evaluate(ctxs)
         for s_ in per_side:
+            if s_ in release_assists:
+                per_side[s_]["release_assist"] = release_assists[s_].report()
+                if release_assists[s_].outcome == "open_timeout":
+                    per_side[s_]["success"] = False
             if controller.events.get(s_):
                 per_side[s_]["events"] = controller.events[s_][:24]
         success = all(v["success"] for v in per_side.values())
@@ -618,6 +739,8 @@ class EpisodeRunner:
         """Success = the bread was released and rests on the plate: its centre is over the plate and
         no part of it touches the table (the plate's floor sits 8.5 mm above the table top)."""
         env = self.env
+        if self.task == "pick_cube":
+            return self._evaluate_pick_cube(ctxs)
         Tp = env.body_T_world("plate")
         R_plate = env.meta["objects"]["plate"]["R"]
         out = {}
@@ -635,10 +758,46 @@ class EpisodeRunner:
                       "done_reason": ctx.done_reason or "timeout"}
         return out
 
+    def _evaluate_pick_cube(self, ctxs: Dict[str, SideCtx]) -> Dict[str, dict]:
+        env = self.env
+        props = self.cfg["scene"]["objects"]
+        half = np.asarray(props["cube"]["size"]) / 2
+        corners = np.array([[x, y, z] for x in (-half[0], half[0])
+                            for y in (-half[1], half[1]) for z in (-half[2], half[2])])
+        relative = np.linalg.inv(env.body_T_world("container")) @ env.body_T_world("cube")
+        local = corners @ relative[:3, :3].T + relative[:3, 3]
+        container_half = np.asarray(props["container"]["size"]) / 2
+        wall = props["container"]["wall"]
+        inside = (np.all(np.abs(local[:, :2]) <= container_half[:2] - wall + 0.001)
+                  and local[:, 2].min() >= -container_half[2] + wall - 0.003
+                  and local[:, 2].max() <= container_half[2] + 0.003)
+        if props["container"].get("shape") == "rounded":
+            from .container import contains_points
+            inside = contains_points(local, props["container"])
+        da = env.obj_free_dadr["cube"]
+        speed = float(np.linalg.norm(env.d.qvel[da:da + 3]))
+        settled = speed < 0.05 and np.linalg.norm(env.d.qvel[da + 3:da + 6]) < 0.5
+        out = {}
+        for side, ctx in ctxs.items():
+            released = not env.arms[side].gripper_cmd_closed()
+            grasped = bool(ctx.hand["has_ever_grasped"])
+            out[side] = {"success": bool(inside and settled and released and grasped),
+                         "inside_container": bool(inside), "released": released, "grasped": grasped,
+                         "settled": bool(settled), "cube_speed": round(speed, 4),
+                         "cube_z": round(float(env.object_pos("cube")[2]), 4),
+                         "cube_max_z": round(getattr(self, "_bread_max_z", {}).get(side, 0.0), 4),
+                         "dist_to_container_center": round(float(np.linalg.norm(relative[:2, 3])), 4),
+                         "done_reason": ctx.done_reason or "timeout"}
+        return out
+
     def _save(self, log_dir, frames, policy_log, res, scene, side_objs):
         env = self.env
         meta = dict(env.meta)
-        meta["scene_init"] = scene or env.default_scene()
+        meta["task"] = self.task
+        meta["scene_only"] = False
+        meta["policy"] = dict(self.cfg["policy"])
+        meta["scene_init"] = env.default_scene()
+        meta["scene_init"].update(scene or {})
         meta["result"] = {"success": res.success, "per_side": res.per_side, "duration": res.duration}
         meta["perception"] = {s: {k: {"T_obj_in_cam_static": np.round(v["T_obj_in_cam_static"], 5).tolist(),
                                       "kpts_local": np.round(v["kpts_local"], 5).tolist()}

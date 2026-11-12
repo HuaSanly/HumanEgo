@@ -243,9 +243,14 @@ def make_table_texture():
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--table-only", action="store_true", help="only the shared table texture (pick_cube preview)")
+    args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(SRC, exist_ok=True)
-    build_bread("croissant")
-    build_bread("bun")
-    build_plate()
+    if not args.table_only:
+        build_bread("croissant")
+        build_bread("bun")
+        build_plate()
     make_table_texture()

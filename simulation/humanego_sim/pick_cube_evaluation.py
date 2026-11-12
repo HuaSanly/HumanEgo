@@ -163,6 +163,9 @@ def failure_reason(row: dict) -> str:
     if not row["physical"]["secure_grasp"]:
         return "unstable_grasp"
     side = row["per_side"]["right"]
+    withdrawal = side.get("withdrawal")
+    if withdrawal and withdrawal["outcome"] == "blocked":
+        return "withdrawal_blocked"
     if not side["released"]:
         return "not_released" if row["holding_at_end"] else "dropped_in_transit"
     if not side["inside_container"]:
@@ -284,6 +287,13 @@ def summarize(root: Path, manifest: dict, protocol: dict) -> dict:
     summary["release_assist_success_rate"] = sum(r["success"] for r in triggered) / len(triggered) if triggered else None
     summary["inside_container_rate"] = sum(r["per_side"]["right"]["inside_container"] for r in valid) / len(rows) if rows else None
     summary["ik_failures"] = sum(r["metrics"].get("ik_fail", 0) for r in valid)
+    measured = [r for r in valid if "withdrawal_contact_steps" in r.get("measurements", {})]
+    summary["withdrawal_metrics"] = {
+        "measured_trials": len(measured),
+        "contact_trials": sum(r["measurements"]["withdrawal_contact_steps"] > 0 for r in measured),
+        "max_container_shift": max((r["measurements"]["withdrawal_container_shift"] for r in measured), default=None),
+        "completed": sum(r["per_side"]["right"].get("withdrawal", {}).get("outcome") == "finished" for r in valid),
+        "blocked": sum(r["per_side"]["right"].get("withdrawal", {}).get("outcome") == "blocked" for r in valid)}
     write_json(root / "summary.json", summary)
     flat = []
     for trial in manifest["trials"]:
@@ -299,6 +309,11 @@ def summarize(root: Path, manifest: dict, protocol: dict) -> dict:
         item.update({key: side.get(key) for key in ("inside_container", "released", "settled")})
         item["release_assist_triggered"] = side.get("release_assist", {}).get("triggered")
         item["ik_failures"] = row.get("metrics", {}).get("ik_fail")
+        item["policy_inference_wall"] = row.get("metrics", {}).get("policy_inference_wall")
+        item["withdrawal_outcome"] = side.get("withdrawal", {}).get("outcome")
+        item["withdrawal_reason"] = side.get("withdrawal", {}).get("reason")
+        for key in ("withdrawal_contact_steps", "withdrawal_max_force", "withdrawal_container_shift"):
+            item[key] = row.get("measurements", {}).get(key)
         flat.append(item)
     with (root / "results.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(flat[0]))

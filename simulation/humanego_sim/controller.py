@@ -68,6 +68,12 @@ class SimController:
         self.ga_near = float(ga.get("timeout_near", 0.0))
         self.ga_approach_max = float(ga.get("approach_max", 4.0))
         self.ga_hold = float(ga.get("close_hold", 0.6))            # s holding still while the fingers close
+        self.ga_hold_min = float(ga.get("close_hold_min", self.ga_hold))
+        self.ga_smooth = float(ga.get("duration_smooth_param", self.duration_smooth_param))
+        if not np.isfinite(self.ga_smooth) or self.ga_smooth <= 0:
+            raise ValueError("grasp duration_smooth_param must be finite and positive")
+        if not 0 <= self.ga_hold_min <= self.ga_hold:
+            raise ValueError("close_hold_min must be between zero and close_hold")
         self.ga_max_tries = int(ga.get("regrasp_max", 2))
         self.ga_q_empty = float(ga.get("q_empty", 0.10))           # gripper opening (0..1) that means nothing held
         self.ga_gap_empty = float(ga.get("gap_empty", 0.015))      # m between the pads ("gap" sensing grippers)
@@ -330,7 +336,10 @@ class SimController:
                         tgt[:3] = actual[:3] + (gs["target"][:3] - actual[:3]) * (step / err)
                 return tgt, False
         if gs["state"] == "closing":
-            if self.t - gs["t0"] >= self.ga_hold:
+            elapsed = self.t - gs["t0"]
+            measured_closed = (elapsed >= self.ga_hold_min and self.ga_hold_min < self.ga_hold
+                               and arm.gripper_settled_closed())
+            if elapsed >= self.ga_hold or measured_closed:
                 gs.update(state="holding", t0=self.t, empty_t=None, f_peak=None)
             return gs["target"], True
         if gs["state"] == "holding":
@@ -434,7 +443,8 @@ class SimController:
                 if i1 > i0:     # the servo walks the plan at step_stride indices per tick
                     v_ff = self.feedforward_gain * (np.asarray(traj[i1][:3]) - np.asarray(traj[i0][:3])) \
                         * (self.step_stride / (i1 - i0)) / dt
-            ok = arm.move_p_in_cam(cmd, duration=dt * self.duration_smooth_param, blocking=False,
+            smooth = self.ga_smooth if override is not None else self.duration_smooth_param
+            ok = arm.move_p_in_cam(cmd, duration=dt * smooth, blocking=False,
                                    safe_z_min=self.safe_z_min, v_ff_in_cam=v_ff)
             if not ok:
                 self.n_ik_fail[side] += 1

@@ -14,6 +14,7 @@ class MeasuredSim(ServeBreadSim):
         super().__init__(cfg, render=render)
         self.cube_body = self.obj_bodies["cube"]
         self.finger_bodies = [self.m.body("right/" + name).id for name in self.robot.finger_bodies[:2]]
+        self.robot_bodies = {i for i in range(self.m.nbody) if self.m.body(i).name.startswith("right/")}
         self.force = np.zeros(6)
         self.initial_cube = self.object_pos("cube").copy()
         self.reset_metrics()
@@ -22,7 +23,11 @@ class MeasuredSim(ServeBreadSim):
         self.measurements = {"one_pad": False, "both_pads": False, "max_lift": 0.0,
                              "max_lift_duration": 0.0, "max_secure_duration": 0.0,
                              "max_horizontal": 0.0, "min_pinch_distance": float("inf"),
-                             "first_close_distance": None, "first_close_delta": None}
+                             "first_close_distance": None, "first_close_delta": None,
+                             "release_started": False, "release_time": None,
+                             "withdrawal_contact_steps": 0, "withdrawal_max_force": 0.0,
+                             "withdrawal_container_shift": 0.0}
+        self._container_at_release = None
         self.lift_duration = self.secure_duration = 0.0
         self.telemetry = []
         self.next_record = 0.0
@@ -40,10 +45,19 @@ class MeasuredSim(ServeBreadSim):
     def measure(self) -> None:
         if not hasattr(self, "measurements"):
             return
+        arm, m = self.arms["right"], self.measurements
+        if not m["release_started"] and m["max_secure_duration"] >= 0.1 and not arm.gripper_cmd_closed():
+            m["release_started"], m["release_time"] = True, float(self.t)
+            self._container_at_release = self.object_pos("container").copy()
         forces = np.zeros(2)
+        withdrawal_force = 0.0
         for index in range(self.d.ncon):
             geoms = self.d.contact[index].geom
             bodies = self.m.geom_bodyid[geoms]
+            container = self.obj_bodies["container"]
+            if m["release_started"] and container in bodies and any(int(b) in self.robot_bodies for b in bodies):
+                mujoco.mj_contactForce(self.m, self.d, index, self.force)
+                withdrawal_force = max(withdrawal_force, abs(float(self.force[0])))
             if self.cube_body not in bodies:
                 continue
             other = bodies[1] if bodies[0] == self.cube_body else bodies[0]
@@ -51,11 +65,14 @@ class MeasuredSim(ServeBreadSim):
                 mujoco.mj_contactForce(self.m, self.d, index, self.force)
                 forces[self.finger_bodies.index(other)] += abs(float(self.force[0]))
         cube = self.object_pos("cube")
-        arm = self.arms["right"]
         pinch = self.d.site_xpos[arm.sid]
         delta = pinch - cube
         distance = float(np.linalg.norm(delta))
-        m = self.measurements
+        if m["release_started"]:
+            m["withdrawal_contact_steps"] += int(withdrawal_force > 0.05)
+            m["withdrawal_max_force"] = max(m["withdrawal_max_force"], withdrawal_force)
+            m["withdrawal_container_shift"] = max(m["withdrawal_container_shift"],
+                float(np.linalg.norm(self.object_pos("container") - self._container_at_release)))
         touching = forces > 0.1
         m["one_pad"] |= bool(touching.any())
         m["both_pads"] |= bool(touching.all())

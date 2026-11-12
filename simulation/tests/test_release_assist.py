@@ -224,3 +224,61 @@ def test_triggered_release_really_drops_block_into_container(physics):
     result = runner.evaluate({"right": ctx})["right"]
     assert result["success"] and result["inside_container"] and result["settled"]
     assert assist.outcome == "placed" and ctx.wrap_phase == "home"
+
+
+def test_guarded_takeover_waits_for_clearance_before_opening(physics):
+    runner, controller, ctx, assist = release_runner(physics)
+    arm = physics.arms["right"]
+    arm.closed = True
+    arm.open_gripper.reset_mock()
+    guard = Mock()
+    guard.prepare_release.return_value = True
+    guard.outcome = "preparing"
+    ctx.withdrawal = guard
+    runner._start_assisted_release(ctx, controller, 2.0)
+    assert ctx.wrap_phase == "prepare_release" and controller.muted["right"]
+    runner._advance_withdrawal(ctx, controller, 2.5)
+    arm.open_gripper.assert_not_called()
+    guard.outcome = "ready_to_open"
+    arm.get_j = lambda: np.zeros(1)
+    arm.move_j = Mock()
+    arm.hold_position = Mock()
+    runner._advance_withdrawal(ctx, controller, 2.6)
+    assert ctx.wrap_phase == "assist_open"
+    arm.open_gripper.assert_called_once()
+    guard.start.return_value = True
+    assist.outcome = "placed"
+    runner._advance_assisted_release(ctx, assist, controller, 3.1)
+    runner._advance_assisted_release(ctx, assist, controller, 3.2)
+    runner._advance_assisted_release(ctx, assist, controller, 3.7)
+    assert ctx.wrap_phase == "withdraw"
+    arm.go_home.assert_not_called()
+
+
+@pytest.mark.parametrize("opens", [False, True])
+def test_guarded_open_or_settle_timeout_holds_instead_of_homing(physics, opens):
+    runner, controller, ctx, assist = release_runner(physics)
+    ctx.withdrawal = Mock()
+    runner.evaluate.return_value = {"right": {"success": False}}
+    if opens:
+        runner._advance_assisted_release(ctx, assist, controller, 1.5)
+    else:
+        physics.arms["right"].get_gripper_q.return_value = 0.3
+    runner._advance_assisted_release(ctx, assist, controller, 3.6)
+    assert ctx.wrap_phase == "blocked"
+    ctx.withdrawal.hold.assert_called_once()
+    physics.arms["right"].go_home.assert_not_called()
+
+
+def test_normal_completion_waits_for_measured_opening_before_withdrawal(physics):
+    runner, controller, ctx, _ = release_runner(physics)
+    ctx.withdrawal = Mock(timeout=5.0)
+    ctx.withdrawal.start.return_value = True
+    ctx.wrap_phase, ctx.wrap_t0 = "guard_open", 1.0
+    physics.arms["right"].get_gripper_q.return_value = 0.5
+    runner._advance_withdrawal(ctx, controller, 2.0)
+    ctx.withdrawal.start.assert_not_called()
+    physics.arms["right"].get_gripper_q.return_value = 0.95
+    runner._advance_withdrawal(ctx, controller, 2.1)
+    ctx.withdrawal.start.assert_called_once_with(2.1)
+    assert ctx.wrap_phase == "withdraw"

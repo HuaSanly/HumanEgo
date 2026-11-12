@@ -35,6 +35,7 @@ from .env import REPO_ROOT, ServeBreadSim
 from .perception import SideObjects, SimPerception, mirror_pose, split_mask_by_x
 from .release_assist import ReleaseAssist
 from .realtime import RealtimeInference, remaining_plan
+from .withdrawal import SafeWithdrawal
 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
@@ -65,6 +66,7 @@ class SideCtx:
     pred_done_prob: float = 0.0
     done_reason: str = ""
     reference_anchor: Optional[ObjectState] = None
+    withdrawal: Optional[SafeWithdrawal] = None
 
 
 @dataclass
@@ -100,6 +102,7 @@ class EpisodeRunner:
         if self.task == "pick_cube" and cfg.get("mode") != "single":
             raise ValueError("pick_cube has one cube and uses the trained right-hand policy; choose --mode single")
         self.device = device
+        self._policy_wall = 0.0
         self.env = env or ServeBreadSim(cfg)
         self.policy = policy or load_policy(cfg, device)
         if self.policy.frame_mode not in ("camera_frame", "anchor_frame") or self.policy.action_mode != "absolute":
@@ -309,10 +312,65 @@ class EpisodeRunner:
         ctx.forced_lift_counter = 0
         ctx.hand.update(is_grasping=False, latched_obj=None, T_lock_h2obj=None)
         ctx.is_done, ctx.done_reason = True, "release_assist"
+        if ctx.withdrawal is not None:
+            self._prepare_release(ctx, controller, t)
+            return
         ctx.wrap_phase, ctx.wrap_t0 = "assist_open", t
         arm.move_p(arm.get_p(), duration=0.05)
         arm.open_gripper(goal_time=controller.open_goal_time)
         controller.events[side].append((round(t, 2), "release_assist:open"))
+
+    def _prepare_release(self, ctx, controller, t):
+        if ctx.withdrawal.prepare_release(t):
+            ctx.wrap_phase, ctx.wrap_t0 = "prepare_release", t
+            controller.events[ctx.side].append((round(t, 2), "withdrawal:prepare"))
+        else:
+            self._withdrawal_blocked(ctx, controller, t)
+
+    def _withdrawal_blocked(self, ctx, controller, t):
+        ctx.withdrawal.hold(t)
+        ctx.wrap_phase, ctx.wrap_t0 = "blocked", t
+        controller.events[ctx.side].append((round(t, 2), "withdrawal:blocked", ctx.withdrawal.reason))
+
+    def _begin_withdrawal(self, ctx, controller, t):
+        if ctx.withdrawal.start(t):
+            ctx.wrap_phase, ctx.wrap_t0 = "withdraw", t
+            controller.events[ctx.side].append((round(t, 2), "withdrawal:start"))
+        else:
+            self._withdrawal_blocked(ctx, controller, t)
+
+    def _advance_withdrawal(self, ctx, controller, t):
+        """Own guarded phases; return False for the legacy/assisted open phases."""
+        guard, arm = ctx.withdrawal, self.env.arms[ctx.side]
+        if ctx.wrap_phase == "prepare_release":
+            guard.preparation_update(t)
+            if guard.outcome == "ready_to_open":
+                ctx.wrap_phase = "assist_open" if ctx.done_reason == "release_assist" else "guard_open"
+                ctx.wrap_t0 = t
+                arm.hold_position()
+                arm.open_gripper(goal_time=controller.open_goal_time)
+                event = "release_assist:open" if ctx.done_reason == "release_assist" else "withdrawal:open"
+                controller.events[ctx.side].append((round(t, 2), event))
+            elif guard.outcome == "blocked":
+                self._withdrawal_blocked(ctx, controller, t)
+            return True
+        if ctx.wrap_phase == "guard_open":
+            if arm.get_gripper_q() >= 0.9 and t - ctx.wrap_t0 >= controller.open_goal_time:
+                ctx.hand["has_released"] = True
+                self._begin_withdrawal(ctx, controller, t)
+            elif t - ctx.wrap_t0 > guard.timeout:
+                guard.reason = "open_timeout"
+                self._withdrawal_blocked(ctx, controller, t)
+            return True
+        if ctx.wrap_phase == "withdraw":
+            guard.update(t)
+            if guard.outcome == "finished":
+                ctx.wrap_phase = "finished"
+                controller.events[ctx.side].append((round(t, 2), "withdrawal:finished"))
+            elif guard.outcome == "blocked":
+                self._withdrawal_blocked(ctx, controller, t)
+            return True
+        return ctx.wrap_phase == "blocked"
 
     def _advance_assisted_release(self, ctx: SideCtx, assist: ReleaseAssist,
                                   controller: SimController, t: float):
@@ -343,6 +401,13 @@ class EpisodeRunner:
             return
         if assist.outcome in ("placed", "open_timeout", "settle_timeout"):
             controller.events[ctx.side].append((round(t, 2), "release_assist:" + assist.outcome))
+            if ctx.withdrawal is not None:
+                if assist.outcome == "placed":
+                    self._begin_withdrawal(ctx, controller, t)
+                else:
+                    ctx.withdrawal.reason = assist.outcome
+                    self._withdrawal_blocked(ctx, controller, t)
+                return
             ctx.wrap_phase, ctx.wrap_t0 = "home", t
             arm.go_home(duration=3.0)
 
@@ -350,7 +415,10 @@ class EpisodeRunner:
     def _run_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
         """Synchronous policy path, shared with the async observation/decode stages."""
         request = self._prepare_side(ctx, clean_bg, t)
-        return self._finish_side(ctx, request, self.policy.infer(*request["inputs"]))
+        started = time.perf_counter()
+        result = self.policy.infer(*request["inputs"])
+        self._policy_wall += time.perf_counter() - started
+        return self._finish_side(ctx, request, result)
 
     def _prepare_side(self, ctx: SideCtx, clean_bg: np.ndarray, t: float):
         """Read simulator state on the physics thread and create detached inputs."""
@@ -529,6 +597,7 @@ class EpisodeRunner:
     def _run_episode(self, scene, seed, log_dir, record_hz, save_policy_images,
                      verbose, intro, policy_seed, inference):
         wall0 = time.time()
+        self._policy_wall = 0.0
         env, cc = self.env, self.cc
         env.rng = np.random.default_rng(seed)
         noise_seed = int(self.cfg["policy"].get("seed", 0)) + seed if policy_seed is None else int(policy_seed)
@@ -554,6 +623,12 @@ class EpisodeRunner:
                                     "T_anchor_static": np.asarray(so.T_anchor_in_cam_static, float).tolist()}
                                 for s, so in side_objs.items()}
         ctxs = {s: SideCtx(side=s, is_flip=(s == "left"), objs=side_objs[s]) for s in sides}
+        withdrawal_config = cc.get("withdrawal", {}) or {}
+        if withdrawal_config.get("enabled"):
+            if self.task != "pick_cube":
+                raise ValueError("guarded withdrawal currently supports pick_cube")
+            for s, ctx in ctxs.items():
+                ctx.withdrawal = SafeWithdrawal(env, s, withdrawal_config)
         if self.policy.frame_mode == "anchor_frame":
             for s, ctx in ctxs.items():
                 # Match training's virtual_static_anchor, even if the object moves later.
@@ -692,6 +767,13 @@ class EpisodeRunner:
                     controller.clear(s)
                     arm = env.arms[s]
                     arm.move_p(arm.get_p(), duration=0.05)      # halt
+                    if ctx.withdrawal is not None:
+                        deadline = max(deadline, t + 2 * ctx.withdrawal.timeout + 4)
+                        if arm.gripper_cmd_closed():
+                            self._prepare_release(ctx, controller, t)
+                        else:
+                            ctx.wrap_phase, ctx.wrap_t0 = "guard_open", t
+                        continue
                     rel = cc.get("release", {}) or {}
                     if rel.get("place_down") and arm.gripper_cmd_closed() and geoms[s].get("place_z") is not None:
                         # lower the bread onto the plate before opening (instead of dropping it)
@@ -712,6 +794,8 @@ class EpisodeRunner:
                         print(f"[sim] {s} done ({ctx.done_reason}) at t={t:.1f}s -> open + home")
             # ---- wrap-up sequencing (open -> home) ----
             for s, ctx in ctxs.items():
+                if ctx.withdrawal is not None and self._advance_withdrawal(ctx, controller, t):
+                    continue
                 if ctx.wrap_phase in ("assist_open", "assist_settle"):
                     self._advance_assisted_release(ctx, release_assists[s], controller, t)
                     continue
@@ -770,6 +854,8 @@ class EpisodeRunner:
                             # bounded extra time to open, settle, go home and record the tail.
                             deadline = max(deadline, t + controller.open_goal_time
                                            + 2 * assist.settle_timeout + 3.1 + 0.6 + Tc)
+                            if ctx.withdrawal is not None:
+                                deadline = max(deadline, t + 2 * ctx.withdrawal.timeout + 4)
                             if verbose:
                                 print(f"[sim] {s} release assist at t={t:.1f}s -> open + settle + home")
                 controller.tick()
@@ -794,7 +880,7 @@ class EpisodeRunner:
                 bz = env.object_pos(self._manipulated_body(s))[2]
                 if bz > self._bread_max_z.get(s, 0.0):
                     self._bread_max_z[s] = float(bz)
-            if all(c.wrap_phase == "finished" for c in ctxs.values()):
+            if all(c.wrap_phase in ("finished", "blocked") for c in ctxs.values()):
                 # keep recording a short tail so the viewer can ease out
                 tail_end = env.t + 0.6
                 while env.t < tail_end:
@@ -810,6 +896,10 @@ class EpisodeRunner:
 
         per_side = self.evaluate(ctxs)
         for s_ in per_side:
+            if ctxs[s_].withdrawal is not None:
+                per_side[s_]["placement_success"] = per_side[s_]["success"]
+                per_side[s_]["withdrawal"] = ctxs[s_].withdrawal.report()
+                per_side[s_]["success"] = bool(per_side[s_]["success"] and ctxs[s_].withdrawal.outcome == "finished")
             if s_ in release_assists:
                 per_side[s_]["release_assist"] = release_assists[s_].report()
                 if release_assists[s_].outcome == "open_timeout":
@@ -819,10 +909,15 @@ class EpisodeRunner:
         success = all(v["success"] for v in per_side.values())
         res = EpisodeResult(success=success, per_side=per_side, duration=env.t, n_policy_steps=n_pol,
                             wall_time=time.time() - wall0, log_dir=log_dir,
-                            metrics={"ik_fail": float(sum(controller.n_ik_fail.values()))})
+                            metrics={"ik_fail": float(sum(controller.n_ik_fail.values())),
+                                     "policy_inference_wall": self._policy_wall})
         if inference is not None:
             res.metrics["realtime"] = 1.0
             res.metrics["mean_policy_latency_wall"] = float(np.mean([p["latency_wall"] for p in policy_log])) if policy_log else 0.0
+            # Poll latency includes time waiting for the runner to consume results.
+            # Keep it separate from synchronous time spent inside infer().
+            res.metrics.pop("policy_inference_wall")
+            res.metrics["policy_observed_wall"] = float(sum(p["latency_wall"] for p in policy_log))
         if log_dir:
             self._save(log_dir, frames, policy_log, res, scene, side_objs)
         if verbose:

@@ -24,6 +24,18 @@ physics:
       force: 35.0
 control:
   safe_z_min: 0.45
+  grasp_assist:
+    duration_smooth_param: 3.0
+    close_hold_min: 0.45
+  release_assist:
+    wait_time: 0.4
+  withdrawal:
+    enabled: true
+    rim_clearance: 0.02
+    collision_margin: 0.003
+    speed: 0.10
+    home_time: 1.6
+    timeout: 5.0
 scene:
   objects:
     cube:
@@ -32,7 +44,6 @@ scene:
     container:
       # 随升高的桌面调整位置，保持投放姿态可达及外置策略相机完整取景。
       pose: [0.46, 0.20, 0.0]
-      # 恢复原始真实场景重建高度（约 9.65 cm），保留容器长宽。
       size: [0.1515524680683616, 0.22978338074932372, 0.09647649800453617]
 evaluation:
   sampling: eval_pick_cube_brx.yaml

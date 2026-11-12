@@ -322,6 +322,14 @@ class SimArm:
             self.set_gripper_position(float(joints[len(self.qadr)]), goal_time=duration)
         return True
 
+    def hold_position(self):
+        """Cancel arm motion at measured joints without changing physical state."""
+        self.q_cmd = self.get_j().copy()
+        self.jinterp = JointInterpolator(self.q_cmd)
+        self.cinterp.reset(self.fk_raw(self.q_cmd))
+        self.mode = "joint"
+        self.d.ctrl[self.aids] = self.q_cmd
+
     def go_home(self, duration: float = 3.0, blocking: bool = False):
         self.move_j(self.robot.home_joints or np.zeros(len(self.qadr)), duration)
 

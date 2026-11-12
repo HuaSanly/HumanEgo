@@ -1,0 +1,34 @@
+{
+  "description": "BRX tilted close-to-wall grasp just before release; layout seed 7777, scene 1, policy seed 2. Initial state only; no weld or teleport during execution.",
+  "arm": [
+    0.45404,
+    0.05007,
+    -0.36067,
+    1.06164,
+    -0.61285,
+    -0.51976,
+    -0.99997
+  ],
+  "jaws": [
+    0.02751,
+    -0.0265
+  ],
+  "container": [
+    0.44293,
+    0.18485,
+    0.19813,
+    1.0,
+    0.0,
+    0.0,
+    -0.0
+  ],
+  "cube": [
+    0.44249,
+    0.1251,
+    0.23574,
+    0.7555,
+    0.58341,
+    -0.15861,
+    -0.2524
+  ]
+}

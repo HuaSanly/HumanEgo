@@ -194,6 +194,9 @@ head looks down at the task. The right arm starts bent with the gripper angled
 about 45 degrees from vertical and the TCP 20 cm above the tabletop; the cube
 is about 8.5 cm to the side of the TCP in the tabletop plane. `right/head_view` is a real camera attached to the
 centre eye; use `--camera_view right/head_view --video` to record that view.
+BRX also checks clearance before opening and validates the return sweep, with
+faster grasp approach and return timing. See the BRX document for its measured
+withdrawal checks and the distinction between placement and complete-task success.
 
 ```bash
 conda activate GlassEgo  # or another environment with simulation/requirements.txt

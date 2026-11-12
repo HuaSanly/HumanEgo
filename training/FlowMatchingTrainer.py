@@ -627,7 +627,7 @@ def eval_ode_inference(
 
             g_scores_cache[k].append(p_gprob[:, k].cpu().numpy().reshape(-1))
             g_labels_cache[k].append(y_g[:, k].cpu().numpy().reshape(-1))
-            grasp_acc_k[k] += float(((p_gprob[:, k] > 0.5).float() == (y_g[:, k] > 0.5).float()).float().mean().cpu())
+            grasp_acc_k[k] += float(((p_gprob[:, k] > 0.65).float() == (y_g[:, k] > 0.5).float()).float().mean().cpu())
 
         # Done accuracy
         if cfg.use_done_in_flow:
@@ -658,7 +658,7 @@ def eval_ode_inference(
     g_f1_k = np.zeros((K,), dtype=np.float64)
     for k in range(K):
         sc, lb = np.concatenate(g_scores_cache[k]), np.concatenate(g_labels_cache[k])
-        pred = (sc >= 0.5).astype(np.int32)
+        pred = (sc >= 0.65).astype(np.int32)
         lab = (lb >= 0.5).astype(np.int32)
         tp = int(((pred == 1) & (lab == 1)).sum())
         fp = int(((pred == 1) & (lab == 0)).sum())

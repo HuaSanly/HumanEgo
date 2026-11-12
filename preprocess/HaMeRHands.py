@@ -687,7 +687,7 @@ class ViTPoseHandDetector:
         ViTPoseHandDetector.VITPOSE_AVAILABLE = True
 
     def detect(self, img_rgb: np.ndarray, kpt_conf_thr: float = 0.3,
-               min_valid_kpts: int = 4, bbox_pad_ratio: float = 0.3) -> list:
+               min_valid_kpts: int = 8, bbox_pad_ratio: float = 0.3) -> list:
         """
         Detect hands via ViTPose wholebody keypoints.
 
@@ -718,7 +718,7 @@ class ViTPoseHandDetector:
             keypoints = {0: raw_kpts}
             ego_mode = True
             # Lower confidence threshold for egocentric (no body context → noisier)
-            kpt_conf_thr = min(kpt_conf_thr, 0.15)
+            kpt_conf_thr = min(kpt_conf_thr, 0.25)
 
         detections = []
         for pid, kpts in keypoints.items():
@@ -997,7 +997,7 @@ class HaMeRHandsGenerator:
         # 1) Filter low-confidence detections
         # 2) Interpolate gaps FIRST (fill missing frames before judging segment length)
         # 3) Then suppress short segments
-        self._filter_by_confidence(aria_hands, conf_th=0.3)
+        self._filter_by_confidence(aria_hands, conf_th=0.52)
         self._interpolate_hand_trajectories(aria_hands, max_gap=self.cfg.hand_interp_max_gap * 2)
         self._suppress_short_hands(aria_hands, min_frames=max(5, self.cfg.hand_min_frames // 3))
         self._smooth_grasp_detection(aria_hands, size=self.cfg.grasp_smooth_win)

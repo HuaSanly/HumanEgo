@@ -47,7 +47,7 @@ single_hand: True
 single_hand_side: "right"
 hand_tracking_method: "hamer"
 data_sources:
-  spatial: 25
+  spatial: 73
 eval_source: "spatial"
 num_workers: 8
 

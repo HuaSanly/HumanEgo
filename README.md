@@ -129,7 +129,7 @@ Regenerates each recording's `preprocess/` folder. See
 **3. Train**
 
 ```bash
-python -m training.FlowMatchingTrainer --task serve_bread --use_cfg --job HumanEgo
+python -m training.FlowMatchingTrainer --task pick_cube --use_cfg --job HumanEgo
 ```
 
 Trains on `mps_serve_bread_001_vrs` and evaluates on the held-out

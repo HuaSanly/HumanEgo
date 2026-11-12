@@ -160,6 +160,9 @@ class ServeBreadSim:
     def initial_joints(self, side: str):
         """Real-rig start pose; with rig.mirror_left_start the left arm starts at the exact mirror of
         the right arm (the real rig's left start pose is not symmetric, which costs it success)."""
+        configured = self.cfg["rig"].get("initial_joints", {}).get(side)
+        if configured is not None:
+            return configured
         r = self.robot
         if side == "left" and self.cfg["rig"].get("mirror_left_start") and r.mirror_sign:
             return [a * b for a, b in zip(r.mirror_sign, r.initial_joints["right"])]

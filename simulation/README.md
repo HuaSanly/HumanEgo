@@ -226,19 +226,22 @@ web export and validation details.
 
 `configs/serve_bread_brx.yaml` inherits `serve_bread.yaml` and replaces the
 Trossen arms with one fixed BRX whole-body robot, operating its right arm.
-The task remains `serve_bread`; the original single-arm bread/plate positions,
-sizes, soft-body physics, perception and official checkpoint are inherited.
+The task remains `serve_bread`; bread/plate sizes, soft-body physics, perception
+and the official checkpoint are inherited. Both props are in front of BRX:
+bread `[0.46, -0.17, 95]`, plate `[0.56, 0.10, 0]` (x/y metres, yaw degrees).
 The default production controller retains the existing grasp threshold, latch,
 automatic lift and idle-done behavior. The tuned grasp skill, our geometric
 release assistance and guarded withdrawal are disabled. Normal done handling
 still opens the gripper and returns home, as in the original serve_bread loop.
 
 The tabletop is 0.96 m above the floor. The external policy camera rises by
-the same 20 cm, preserving the original camera-to-prop geometry. BRX stays
-upright at its original floor height, 10 cm forward and 5 cm right of the pick_cube
-BRX pose, keeping the policy's wrist targets within the arm's workspace. The rear
-table edge is moved forward to
-clear the robot; its footprint still contains both original props. The
+the same 20 cm, retaining the original camera-to-table geometry. BRX stays
+upright at its original floor height, with base `[0.01361, -0.20, -0.32104]`.
+The head faces forward (`pan_deg: 0`) and down (`tilt_deg: 57`). Scene-local
+`rig.initial_joints` matches the original Trossen starting EE pose in the policy
+camera frame; the native pick_cube ready pose starts too far to the right and
+near wrist limits in this layout. The rear table edge is moved forward to
+clear the robot. The
 base-relative safety floor is 0.50 m, about 21 mm below the tabletop. The head
 camera remains a preview camera; policy observations use the inherited D405.
 
@@ -254,15 +257,20 @@ python simulation/scripts/run_episode.py --config simulation/configs/serve_bread
   --seed 0 --video --out serve_bread_brx_s0
 
 python -m pytest simulation/tests/test_serve_bread_brx.py -q
+
+# Nine positions, identical environment/policy noise, measured finger contacts.
+python simulation/scripts/serve_bread_brx_sweep.py --duration 25 \
+  --out simulation/runs/serve_bread_brx_positions_01
 ```
 
-The initial base alignment stalled after repeated IK rejections. After the 5 cm
-rightward correction, a complete seed-0 run with the official checkpoint and
-production parameters had no IK rejections and the TCP moved about 20 cm.
-It still timed out at 40 s without grasping, so successful task transfer remains
-unverified. A closed-loop smoke test checks motion and IK acceptance, independently
-of placement success. The table-height regression checks cover both rigid and soft bread,
-reset poses, relative-height success/failure metrics and perceived place height.
+With the matched ready pose, all nine development positions produced sustained
+two-pad lifts in 25 s (12.7–33.7 cm maximum lift), with no grasp/release assistance.
+None completed placement in that window; the default 40 s CLI run also timed out
+holding the bread. Matching the initial policy observation fixes the grasping
+failure, but transport/placement still encounters IK rejections. These are fixed
+positions and one noise seed, not a general success-rate estimate. See
+[`docs/serve_bread_brx.md`](docs/serve_bread_brx.md) for the position table,
+paired ready-pose/Trossen controls, criteria and recordings.
 
 ## Results
 

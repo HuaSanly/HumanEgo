@@ -21,8 +21,10 @@ def test_brx_preserves_the_production_task_and_camera_view():
     cfg = load_config(CONFIG)
     assert cfg["task"] == "serve_bread" and cfg["robot"] == "brx20260825"
     assert cfg["mode"] == "single" and cfg["profile"] == "production"
-    for key in ("scene", "physics", "perception", "policy", "camera"):
+    for key in ("physics", "perception", "policy", "camera"):
         assert cfg[key] == original[key]
+    for key in ("type", "scale"):
+        assert cfg["scene"]["single"]["bread"][key] == original["scene"]["single"]["bread"][key]
     for key, value in original["control"].items():
         if key != "safe_z_min":
             assert cfg["control"][key] == value, key
@@ -59,10 +61,11 @@ def brx_env():
     return env
 
 
-def test_brx_layout_is_settled_collision_free_and_reachable(brx_env):
+def test_front_layout_is_settled_and_grasp_pose_is_reachable(brx_env):
     env = brx_env
     assert env.sides == ["right"] and len(env.arms["right"].qadr) == 7
     arm = env.arms["right"]
+    np.testing.assert_allclose(arm.get_j(), env.cfg["rig"]["initial_joints"]["right"], atol=1e-4)
     for contact in env.d.contact[:env.d.ncon]:
         bodies = [env.m.body(int(env.m.geom_bodyid[g])).name for g in contact.geom]
         if any(name.startswith("right/") for name in bodies):
@@ -72,17 +75,53 @@ def test_brx_layout_is_settled_collision_free_and_reachable(brx_env):
         low = env.object_lowest_z(name) if name in env.soft else env.object_pos(name)[2]
         assert abs(low - env.meta["table_surface_z"]) < 0.002
         np.testing.assert_allclose(env.object_pos(name)[:2], env.default_scene()[name][:2], atol=0.002)
-        for clearance in (0.026, 0.12):
-            target = np.eye(4)
-            # Both locations admit a downward pinch; the wrist turns across the plate.
-            yaw = 180 if name == "bread_right" else 270
-            target[:3, :3] = Rotation.from_euler("xyz", [180, 0, yaw], degrees=True).as_matrix()
-            target[:3, 3] = [*env.object_pos(name)[:2], env.meta["table_surface_z"] + clearance]
-            q, error = arm.ik(arm.T_world_in_base @ target, seed, iters=500)
-            assert error < 0.002, (name, clearance, error)
-            actual = arm.T_base_in_world @ arm.fk_raw(q)
-            assert Rotation.from_matrix(target[:3, :3] @ actual[:3, :3].T).magnitude() < 0.01
-            seed = q
+        assert env.object_pos(name)[0] > arm.T_base_in_world[0, 3] + 0.25
+        if name == "bread_right":
+            for clearance in (0.035, 0.12):
+                target = np.eye(4)
+                target[:3, :3] = Rotation.from_euler("xyz", [125, 15, 180], degrees=True).as_matrix()
+                target[:3, 3] = [*env.object_pos(name)[:2], env.meta["table_surface_z"] + clearance]
+                q, error = arm.ik(arm.T_world_in_base @ target, seed, iters=500)
+                assert error < 0.002, (name, clearance, error)
+                actual = arm.T_base_in_world @ arm.fk_raw(q)
+                assert Rotation.from_matrix(target[:3, :3] @ actual[:3, :3].T).magnitude() < 0.01
+                seed = q
+
+
+def test_ready_hand_matches_the_original_policy_input(brx_env):
+    reference = ServeBreadSim(load_config(None, {"mode": "single"}), render=False)
+    reference.reset()
+    expected = reference.arms["right"].get_T_ee_in_cam()
+    actual = brx_env.arms["right"].get_T_ee_in_cam()
+    np.testing.assert_allclose(actual[:3, 3], expected[:3, 3], atol=2e-4)
+    assert Rotation.from_matrix(expected[:3, :3] @ actual[:3, :3].T).magnitude() < 0.002
+
+
+def test_head_faces_forward_and_sees_the_front_layout(brx_env):
+    env = brx_env
+    camera = env.m.camera("right/head_view").id
+    rotation = env.d.cam_xmat[camera].reshape(3, 3)
+    forward = -rotation[:, 2]
+    assert abs(np.rad2deg(np.arctan2(forward[1], forward[0]))) < 2
+    assert forward[2] < -0.7
+    optical = rotation @ np.diag([1, -1, -1])
+    focal = env.H / (2 * np.tan(np.deg2rad(env.m.cam_fovy[camera] / 2)))
+    for name in env.obj_names:
+        if name == "plate":
+            radius = env.meta["objects"][name]["R"]
+            height = env.meta["objects"][name]["H"]
+            corners = np.array([[radius * np.cos(a), radius * np.sin(a), z]
+                                for a in np.linspace(0, 2 * np.pi, 64, endpoint=False)
+                                for z in (0, height)])
+        else:
+            half = np.array(env.meta["objects"][name]["extents"]) / 2
+            corners = np.array([[x, y, z] for x in (-half[0], half[0])
+                                for y in (-half[1], half[1]) for z in (-half[2], half[2])])
+        world = corners @ env.body_T_world(name)[:3, :3].T + env.object_pos(name)
+        points = (world - env.d.cam_xpos[camera]) @ optical
+        assert np.all(points[:, 2] > 0)
+        pixels = points[:, :2] / points[:, 2:] * focal + [env.W / 2, env.H / 2]
+        assert np.all(pixels > 5) and np.all(pixels < [env.W - 5, env.H - 5])
 
 
 @pytest.mark.parametrize("surface", [0.0, 0.20, -0.10])

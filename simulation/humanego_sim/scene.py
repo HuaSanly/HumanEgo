@@ -127,8 +127,24 @@ def _spec_with_rel_paths(xml_rel: str) -> mujoco.MjSpec:
     return child
 
 
-def _load_robot_spec(robot: RobotSpec, phys: dict) -> mujoco.MjSpec:
+def _load_robot_spec(robot: RobotSpec, phys: dict, head_pose: Optional[dict] = None) -> mujoco.MjSpec:
     child = _spec_with_rel_paths(robot.xml)
+    if head_pose:
+        if robot.name != "brx20260825":
+            raise ValueError("rig.head_pose currently supports brx20260825")
+        with open(os.path.join(ASSETS, os.path.dirname(robot.xml), "provenance.json")) as file:
+            parked = json.load(file)["parked_joints"]
+        # The importer folds these -Z joint rotations into fixed body frames.
+        # Apply a scene-local delta from the recorded import pose.
+        for field, joint, body in (("pan_deg", "Head02_Joint", "Head02_Link"),
+                                    ("tilt_deg", "Head03_Joint", "Head03_Link")):
+            if field in head_pose:
+                angle = np.deg2rad(float(head_pose[field]))
+                if not np.isfinite(angle):
+                    raise ValueError("rig.head_pose angles must be finite")
+                node = child.body(body)
+                rotation = R.from_quat(np.asarray(node.quat)[[1, 2, 3, 0]])
+                node.quat = (rotation * R.from_euler("z", parked[joint] - angle)).as_quat()[[3, 0, 1, 2]]
     for att in robot.attach:                     # e.g. Robotiq 2F-85 on the UR5e flange
         sub = _spec_with_rel_paths(att["xml"])
         child.attach(sub, prefix=att.get("prefix", ""), site=child.site(att["site"]))
@@ -465,7 +481,7 @@ def build_scene(cfg: dict, robot: RobotSpec, cam: CameraSpec, out_name: Optional
 
     # ---------------- arms ----------------
     for s in sides:
-        child = _load_robot_spec(robot, phys)
+        child = _load_robot_spec(robot, phys, cfg["rig"].get("head_pose"))
         child.option.impratio = spec.option.impratio      # the parent's options win; avoid the attach warning
         child.option.integrator = spec.option.integrator
         Tb = geo.T_base_in_world[s].copy()

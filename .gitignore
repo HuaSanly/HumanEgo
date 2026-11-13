@@ -50,3 +50,4 @@ htmlcov/
 # Inference build outputs
 /inference/**/build/
 /inference/**/dist/
+/AGENTS.md

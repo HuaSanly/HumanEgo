@@ -55,6 +55,11 @@ def load_config(path: str | Path) -> InferenceConfig:
     policy = dict(values["policy"])
     camera = dict(values["camera"])
     policy["ckpt"] = str(_resolve_path(policy.get("ckpt"), source))
+    policy.setdefault("noise_seed", 0)
+    if type(policy["noise_seed"]) is not int or not 0 <= policy["noise_seed"] < 2**64:
+        raise ValueError("policy.noise_seed must be an integer in [0, 2**64)")
+    if policy.get("noise_path") is not None:
+        policy["noise_path"] = str(_resolve_path(policy["noise_path"], source))
     steps = policy.get("num_inference_steps")
     if type(steps) is not int or steps <= 0:
         raise ValueError(
@@ -112,6 +117,9 @@ def load_config(path: str | Path) -> InferenceConfig:
                 raise ValueError(f"{group}.{key} must be a boolean")
 
     deployment = dict(values["deployment"])
+    deployment["log_dir"] = str(
+        _resolve_path(deployment.get("log_dir", "runs/inference"), source)
+    )
     if deployment.get("diagnostic_mode", "canvas") not in ("canvas", "full"):
         raise ValueError("deployment.diagnostic_mode must be canvas or full")
     if deployment.get("diagnostic_dir") is not None:
@@ -198,15 +206,21 @@ def validate_runtime_config(config: InferenceConfig) -> None:
     ):
         raise ValueError("HumanEgo deployment requires chunk mode at 30 Hz")
 
-    checkpoint = Path(config.policy["ckpt"])
-    required_files = (
-        checkpoint,
-        checkpoint.parent / "config.json",
-        checkpoint.parent / "dataset_stats.json",
-    )
-    for file in required_files:
+    for file in policy_files(config).values():
         if not file.is_file():
             raise FileNotFoundError(f"Required policy file is missing: {file}")
+
+
+def policy_files(config: InferenceConfig) -> dict[str, Path]:
+    checkpoint = Path(config.policy["ckpt"])
+    files = {
+        "checkpoint": checkpoint,
+        "training_config": checkpoint.parent / "config.json",
+        "dataset_stats": checkpoint.parent / "dataset_stats.json",
+    }
+    if config.policy.get("noise_path") is not None:
+        files["noise"] = Path(config.policy["noise_path"])
+    return files
 
 
 def main() -> None:

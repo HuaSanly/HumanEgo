@@ -75,7 +75,7 @@ def as_array(value):
 
 
 @contextmanager
-def record_request(root, message, config):
+def record_request(root, message):
     if root is None:
         yield None
         return
@@ -92,16 +92,6 @@ def record_request(root, message, config):
         "status": "processing",
     }
     trace.json("request.json", metadata)
-    trace.json(
-        "config.json",
-        {
-            "policy": config.policy,
-            "camera": config.camera,
-            "perception": config.perception,
-            "intrinsics": config.intrinsics,
-            "extrinsics": config.extrinsics,
-        },
-    )
     features = body.get("features", {})
     for side in ("left", "right"):
         trace.image(

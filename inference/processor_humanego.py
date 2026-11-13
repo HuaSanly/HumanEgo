@@ -1,21 +1,15 @@
-"""Episode perception and native LeRobot processor serialization."""
+"""Episode perception and LeRobot processor assembly."""
 
 from dataclasses import dataclass
 import logging
-from pathlib import Path
 import time
 
 import numpy as np
 
-from lerobot.processor import ProcessorStep, ProcessorStepRegistry
-from lerobot.processor.factory import (
-    make_policy_processor_pipelines,
-    load_pretrained_policy_processors,
-)
-from lerobot.processor import DeviceProcessorStep, RenameObservationsProcessorStep
+from lerobot.processor import DeviceProcessorStep, ProcessorStep
+from lerobot.processor.factory import make_policy_processor_pipelines
 
-
-from .config import InferenceConfig, load_config, validate_runtime_config
+from .config import InferenceConfig
 from .data_types import Observation, PreparedObservation, RobotState, StereoFrame
 from .diagnostics import RequestTrace, current_trace
 from .perception import Perception
@@ -169,11 +163,9 @@ class HumanEgoProcessor:
         self.perception.reset()
 
 
-@ProcessorStepRegistry.register("humanego_perception")
 @dataclass
 class HumanEgoPerceptionStep(ProcessorStep):
-    params_path: str
-    device: str = "cuda"
+    config: InferenceConfig
 
     def __post_init__(self):
         self.processor = None
@@ -181,10 +173,7 @@ class HumanEgoPerceptionStep(ProcessorStep):
 
     def _processor(self):
         if self.processor is None:
-            cfg = load_config(self.params_path)
-            cfg.policy["device"] = self.device
-            validate_runtime_config(cfg)
-            self.processor = HumanEgoProcessor(cfg, Perception(cfg))
+            self.processor = HumanEgoProcessor(self.config, Perception(self.config))
         return self.processor
 
     def __call__(self, transition):
@@ -221,39 +210,12 @@ class HumanEgoPerceptionStep(ProcessorStep):
         if self.processor is not None:
             self.processor.reset()
 
-    def get_config(self):
-        return {"params_path": self.params_path, "device": self.device}
-
     def transform_features(self, features):
         return features
 
 
-def make_humanego_pre_post_processors(config, dataset_stats=None):
-    root = Path(config.pretrained_path or ".")
+def make_humanego_pre_post_processors(config: InferenceConfig):
     return make_policy_processor_pipelines(
-        [
-            RenameObservationsProcessorStep({}),
-            HumanEgoPerceptionStep(str(root / config.params_file), config.device),
-            DeviceProcessorStep(config.device),
-        ],
+        [HumanEgoPerceptionStep(config)],
         [DeviceProcessorStep("cpu")],
-    )
-
-
-def make_humanego_pre_post_processors_from_pretrained(
-    config,
-    pretrained_path,
-    preprocessor_overrides=None,
-    postprocessor_overrides=None,
-    **kwargs,
-):
-    overrides = dict(preprocessor_overrides or {})
-    overrides["humanego_perception"] = {
-        "params_path": str(Path(pretrained_path) / config.params_file),
-        "device": config.device,
-    }
-    return load_pretrained_policy_processors(
-        pretrained_path,
-        preprocessor_overrides=overrides,
-        postprocessor_overrides=postprocessor_overrides,
     )

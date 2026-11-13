@@ -102,16 +102,13 @@ conda create -n humanego-inference python=3.12 -y
 conda activate humanego-inference
 bash setup.sh inference
 
-# 检查配置和运行时依赖
+# 检查配置、标定和权重文件
 python -m inference.config --config_path cfg/inference/params.yaml --validate-runtime
 
-
-# 导出部署包并启动服务
-humanego-export --config_path cfg/inference/params.yaml --output runs/deploy/humanego-anchor
-python -m lerobot_policy_humanego.server --config_path runs/deploy/humanego-anchor/server.yaml
+humanego-policy-server --config_path cfg/inference/params.yaml
 ```
 
-导出前需准备 `cfg/inference/params.yaml` 指定的 checkpoint 及配套文件，并核对双目标定和末端坐标配置。导出目录不能是已有的非空目录。客户端接口和部署说明见 [推理文档](inference/README.md)与[客户端接口](inference/CLIENT_INTERFACE.md)。
+服务直接加载 `cfg/inference/params.yaml` 指定的 checkpoint、同目录的 `config.json` 和 `dataset_stats.json`。每次启动在 `runs/inference/run_*/` 保存生效配置与 `server.log`。配置和客户端接口见 [推理文档](inference/README.md)与[客户端接口](inference/CLIENT_INTERFACE.md)。
 
 ## 许可与引用
 

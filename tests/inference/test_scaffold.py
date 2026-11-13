@@ -134,17 +134,20 @@ class ScaffoldTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "dataset_stats.json"):
                 validate_runtime_config(config)
 
-    def test_export_refuses_nonempty_directory_before_loading_weights(self):
-        from lerobot_policy_humanego.export import export_policy
-
+    def test_runtime_resolves_log_directory_and_explicit_noise_path(self):
         with tempfile.TemporaryDirectory() as directory:
             config = self.make_complete_config(directory)
-            output = Path(directory) / "export"
-            output.mkdir()
-            (output / "keep.txt").write_text("owned result")
-            with self.assertRaisesRegex(FileExistsError, "nonempty"):
-                export_policy(config, output)
-            self.assertEqual((output / "keep.txt").read_text(), "owned result")
+            params = yaml.safe_load(config.source.read_text())
+            params["deployment"]["log_dir"] = "logs"
+            params["policy"]["noise_path"] = "model/noise.npy"
+            config.source.write_text(yaml.safe_dump(params))
+            config = load_config(config.source)
+            self.assertEqual(config.deployment["log_dir"], str(Path(directory) / "logs"))
+            self.assertEqual(
+                config.policy["noise_path"], str(Path(directory) / "model/noise.npy")
+            )
+            with self.assertRaisesRegex(FileNotFoundError, "noise.npy"):
+                validate_runtime_config(config)
 
     def test_runtime_checks_metric_units_and_stereo_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -191,8 +194,7 @@ class ScaffoldTests(unittest.TestCase):
         code = """
 import importlib, sys
 sys.path.insert(0, sys.argv[1])
-for name in ('config', 'data_types', 'stereo', 'perception', 'rendering',
-             'export'):
+for name in ('config', 'data_types', 'stereo', 'perception', 'rendering'):
     importlib.import_module('inference.' + name)
 for name in ('torch', 'transformers', 'onnxruntime', 'pyrealsense2', 'lerobot'):
     assert name not in sys.modules, name

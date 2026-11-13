@@ -1,7 +1,6 @@
 """Native serving adapter; all neural inference remains in the original ICTPolicy."""
 
 import logging
-from pathlib import Path
 import time
 
 import numpy as np
@@ -9,7 +8,7 @@ import torch
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.inference import ChunkPolicySpec, ExecutionMode
 
-from .config import load_config, validate_runtime_config
+from .config import InferenceConfig
 from .configuration_humanego import HumanEgoConfig
 from .data_types import PreparedObservation
 from .diagnostics import current_trace
@@ -23,17 +22,10 @@ class HumanEgoPolicy(PreTrainedPolicy):
     config_class = HumanEgoConfig
     name = "humanego"
 
-    def __init__(self, config: HumanEgoConfig, *, policy: ICTPolicy | None = None):
+    def __init__(self, config: HumanEgoConfig, serving_config: InferenceConfig):
         super().__init__(config)
-        root = Path(config.pretrained_path or ".")
-        self.serving_config = load_config(root / config.params_file)
-        validate_runtime_config(self.serving_config)
-        self.policy = (
-            policy
-            if policy is not None
-            else ICTPolicy(self.serving_config.policy, device=config.device)
-        )
-        original = self.policy
+        settings = serving_config.policy
+        original = ICTPolicy(settings, device=config.device)
         if (
             not original.single_hand
             or original.single_hand_side != "right"
@@ -46,11 +38,34 @@ class HumanEgoPolicy(PreTrainedPolicy):
             raise ValueError(
                 "Checkpoint does not implement the HumanEgo_anchor serving baseline"
             )
-        # Register the EXISTING network and noise, without constructing any second model.
+        noise_path = settings.get("noise_path")
+        if noise_path is None:
+            generator = torch.Generator(device="cpu").manual_seed(settings["noise_seed"])
+            noise = torch.randn(
+                original.noise.shape, generator=generator, dtype=torch.float32
+            )
+        else:
+            with open(noise_path, "rb") as stream:
+                values = np.load(stream, allow_pickle=False)
+            if (
+                not isinstance(values, np.ndarray)
+                or values.shape != tuple(original.noise.shape)
+                or values.dtype.kind != "f"
+                or not np.isfinite(values).all()
+                or np.abs(values).max() > np.finfo(np.float32).max
+            ):
+                raise ValueError(
+                    f"Invalid fixed noise in {noise_path}: expected finite floating-point "
+                    f"values with shape {tuple(original.noise.shape)}"
+                )
+            noise = torch.from_numpy(values.astype(np.float32, copy=False))
+        original.noise.copy_(noise)
+        original.device = str(original.noise.device)
+        self.policy = original
         self.model = original.model
         self.register_buffer("fixed_noise", original.noise, persistent=False)
         self.T_align = np.asarray(
-            self.serving_config.extrinsics["T_EE_from_hand"], np.float32
+            serving_config.extrinsics["T_EE_from_hand"], np.float32
         )
         self.eval()
 
@@ -59,24 +74,6 @@ class HumanEgoPolicy(PreTrainedPolicy):
         self.policy.noise = self.fixed_noise
         self.policy.device = str(self.fixed_noise.device)
         return result
-
-    @classmethod
-    def from_pretrained(cls, pretrained_name_or_path, *, config=None, **kwargs):
-        root = Path(pretrained_name_or_path).resolve()
-        config = config or HumanEgoConfig.from_pretrained(root)
-        config.pretrained_path = root
-        instance = cls(config)
-        noise = np.load(root / config.noise_file, allow_pickle=False)
-        if (
-            noise.shape != tuple(instance.fixed_noise.shape)
-            or not np.isfinite(noise).all()
-        ):
-            raise ValueError("Deployment fixed noise has an invalid shape or values")
-        instance.fixed_noise.copy_(
-            torch.as_tensor(noise, device=instance.fixed_noise.device)
-        )
-        instance.policy.noise = instance.fixed_noise
-        return instance.eval()
 
     def chunk_inference_spec(self):
         return ChunkPolicySpec(
@@ -93,7 +90,7 @@ class HumanEgoPolicy(PreTrainedPolicy):
         if isinstance(batch, PreparedObservation):
             prepared = batch
         elif batch.get("observation.humanego.startup_probe") is True:
-            # Native startup warmup is discarded by load_deployment before admission.
+            # The server discards startup predictions before accepting requests.
             image = np.zeros((240, 320, 3), np.uint8)
             x_rgb = self.policy.prepare_image(image)
             ict, mask = self.policy.build_ict({"right": np.eye(4)}, {"right": 0.0}, {})

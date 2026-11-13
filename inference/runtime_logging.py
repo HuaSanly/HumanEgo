@@ -27,15 +27,9 @@ def message_tag(message) -> str:
 
 
 class LoggedSessionWorker(SessionWorker):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, trace_root=None, **kwargs):
+        self.trace_root = trace_root
         super().__init__(*args, **kwargs)
-        config = self.runner.policy.serving_config
-        directory = config.deployment.get("diagnostic_dir")
-        self.trace_root = (
-            f"{directory}/run_{time.time_ns()}_{self.instance_id}"
-            if directory and config.deployment.get("diagnostic_mode") == "full"
-            else None
-        )
 
     def submit(self, message):
         if message.message_type is MessageType.OBSERVATION:
@@ -63,9 +57,7 @@ class LoggedSessionWorker(SessionWorker):
         started = time.perf_counter()
         logger.info("inference_started %s", request_tag())
         try:
-            root = getattr(self, "trace_root", None)
-            config = self.runner.policy.serving_config if root else None
-            with record_request(root, message, config) as trace:
+            with record_request(self.trace_root, message) as trace:
                 response = super()._execute(message)
                 if trace:
                     if response.message_type is MessageType.ACTION:

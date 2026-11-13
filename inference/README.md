@@ -2,9 +2,9 @@
 
 服务端已实现双目深度、DINO/SAM2 分割、LaMa 去臂、场景更新、训练约定绘图、原策略推理和官方 LeRobot remote 接入。`policy.py` 是唯一策略实现，代码保持不变。网络、归一化、固定噪声、20 步 ODE、sigmoid grasp 与 done 解码均由它完成。
 
-使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`，日志入口为 `python -m lerobot_policy_humanego.server`，内部使用官方 `PolicyServer`、`SessionWorker` 和 Zenoh 传输，传输、session、reset、请求代际和动作缓冲均由上游负责。上游源码没有修改。首版只支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz；RTC 和语言功能关闭。
+使用官方 LeRobot revision `5517a326eeb9b457cfe07d59b9bfdf291799c8d9`。`humanego-policy-server` 直接读取项目配置并构造 `PolicyRunner`，使用官方 `PolicyServer`、`SessionWorker` 和 Zenoh 传输。支持单右手、absolute、anchor frame、50 步普通 chunk、30 Hz。RTC 和语言功能关闭。
 
-软件验收已使用 RTX 3060、真实训练录制双目、真实 GPU 模型及跨进程 Zenoh 回环完成。BRX 双目基线和校正内参由提供的相机标定计算，EE 与模型 hand 坐标系按约定重合。真机标定、闭环和任务成功率另行验收。
+此前版本已在 RTX 3060 上使用真实训练录制双目和 GPU 模型完成跨进程 Zenoh 回环。BRX 双目基线和校正内参由提供的相机标定计算，EE 与模型 hand 坐标系按约定重合。真机标定、闭环和任务成功率另行验收。
 
 ## 环境与安装
 
@@ -22,7 +22,7 @@ bash setup.sh inference
 
 本机验证环境名为 `HumanEgo-inference`，可以执行 `conda activate HumanEgo-inference`。
 
-## 配置与导出
+## 配置与启动
 
 参数集中在 `cfg/inference/params.yaml`，其中文件路径统一相对于这个 YAML 解析。内参是**实际传输的 640×480 校正图**的内参；禁止填入未缩放的原始相机内参。
 
@@ -37,28 +37,17 @@ bash setup.sh inference
 提供的原始相机内参、畸变和左右相机外参记录在 `cfg/inference/stereo_raw_calibration.yaml`，供标定使用，运行时不读取。`extrinsics.yaml` 的水平校正基线 0.060039595 m 是原始平移向量的长度，须核对客户端实际校正映射；左右校正内参由 `stereoRectify`（`CALIB_ZERO_DISPARITY`，`alpha=0`，640×480）的 P1/P2 左上角计算；原始文件同时记录 R1/R2 和 P1/P2。服务端接收已校正图像，不再次校正；上线前须核对客户端映射和实际图像。
 
 ```bash
-python -m inference.config --config_path cfg/inference/params.yaml
 python -m inference.config --config_path cfg/inference/params.yaml --validate-runtime
-
-# 正式标定填妥后导出。已有非空目录会被拒绝覆盖。
-humanego-export --config_path cfg/inference/params.yaml --output runs/deploy/humanego-anchor
-python -m lerobot_policy_humanego.server --config_path runs/deploy/humanego-anchor/server.yaml
+humanego-policy-server --config_path cfg/inference/params.yaml
 ```
 
-导出包含：原 checkpoint 与两个 sidecar（`policy/`）、固定噪声、已解析标定和感知/绘图参数（`assets/`）、原生配置、saved processors、版本和文件哈希清单、官方 `server.yaml`。启动不读取原训练目录。DINO/SAM2/LaMa 按固定 Hub revision 从缓存加载，首次使用允许按配置下载；缓存完整时可设 `HF_HUB_OFFLINE=1`。
+服务直接加载 `policy.ckpt` 及同目录的 `config.json` 和 `dataset_stats.json`。`policy.noise_seed` 默认是 `0`，用于生成每次启动和 reset 后都复用的固定噪声。需要使用以前保存的噪声时，在 `policy.noise_path` 指定对应的 `.npy`。修改配置后重启服务。
 
-移动部署包后，参数、噪声和 processor 路径仍相对于包内解析；修改启动路径即可：
-
-```bash
-python -m lerobot_policy_humanego.server --config_path /new/location/server.yaml \
-  --model.repo_or_path=/new/location
-```
-
-原 checkpoint 的两个 sidecar 原样保存，其中历史训练数据路径只是训练元数据，推理不会访问它们。请使用 `humanego-export` 准备部署产物。
+DINO、SAM2 和 LaMa 按固定 Hub revision 从缓存加载。缓存完整时可设 `HF_HUB_OFFLINE=1`。
 
 ## 实时运行日志
 
-使用上面的日志入口启动，部署包 `server.yaml` 中 `log_level: INFO` 即可。已有部署包可直接使用，无需重新导出；更改代码后需重启服务。安装更新后的插件还可使用 `humanego-policy-server --config_path <server.yaml>`。
+在 `cfg/inference/params.yaml` 中设置 `deployment.log_level`。服务启动时在 `deployment.log_dir` 下建立独立的 `run_*` 目录，默认位于 `runs/inference/`。`server.log` 从启动开始记录文本日志。预热前写入一份 `config.json`，包含解析后的配置和标定、权重及配套文件的路径和 SHA-256、固定噪声摘要，以及远程服务使用的模型标识。
 
 同一 `request` / `session` / `generation` 关联以下事件：
 
@@ -72,23 +61,23 @@ python -m lerobot_policy_humanego.server --config_path /new/location/server.yaml
 | `action_published` | 已调用 Zenoh 发布，列出请求、动作形状、字节数和官方阶段耗时；`delivery_ack=false` 表示没有客户端接收或执行确认 |
 | `inference_failed` / `error_published` / `reply_publish_failed` | 推理异常、向客户端发布错误或传输发布失败 |
 
-启动预热标记为 `warmup_probe`，不计为收到客户端观测。原始 `lerobot-policy-server` 入口仍可使用，但不包含新增的收包、请求关联及发布日志。日志默认输出到终端，不保存完整图像或动作数组。
+启动预热标记为 `warmup_probe`。终端和 `server.log` 记录请求摘要。完整图像与动作数组可通过详情诊断保存。
 
 ## 详情诊断模式
 
-在部署包 `assets/params.yaml` 中配置，重启日志入口后生效：
+在 `cfg/inference/params.yaml` 中配置，重启服务后生效：
 
 ```yaml
 deployment:
-  diagnostic_dir: /home/huasan/HumanEgo/runs/inference-diagnostics
+  diagnostic_dir: ../../runs/inference-diagnostics
   diagnostic_mode: full
 ```
 
-`canvas` 为默认模式，只保存画布及投影 JSON；`full` 保存关键过程数据，目录为 `run_<时间>_<实例>/<session>/<generation>/<request>/`，预热后的文本日志保存到该 run 目录的 `server.log`。`diagnostic_dir: null` 关闭文件诊断。导出仍会清空诊断目录，须在实际部署包中显式设置。
+`canvas` 为默认模式，保存画布及投影 JSON。`full` 保存关键过程数据，目录为 `run_<时间>_<标识>/<session>/<generation>/<request>/`，与日志目录的运行名称一致。`diagnostic_dir: null` 关闭逐请求诊断，启动配置快照和文本日志仍会保存。
 
 | 文件 | 数据 |
 | --- | --- |
-| `request.json`、`config.json` | 请求标识、采集时间、处理状态、异常及所用配置和标定 |
+| `request.json` | 请求标识、采集时间、处理状态和异常 |
 | `input/` | 原始左右 RGB 图、完整实测 `state.npy` |
 | `detections/`、`masks/` | DINO 选框与分数、投影提示框、物体/机械臂/保护 mask |
 | `stereo/` | 实际计算时的视差、米制深度、有效 mask、物体三维点；稳定阶段跳过深度时明确记录 |
@@ -113,10 +102,10 @@ deployment:
 | `stereo.py` | SGBM128/窗口5、左右一致性、0.15–2.5m 深度过滤、内侧轮廓采样与 MAD 过滤 |
 | `perception.py` | 常驻 DINO/SAM2/LaMa、复用训练 `pca1`、物体更新及抓取传播 |
 | `rendering.py` | 1624×1232 训练画布、局部 -Y 夹爪、训练配色和点序 |
-| `processor_humanego.py` | 输入检查、感知编排、场景 reset、saved processor 加载 |
+| `processor_humanego.py` | 输入检查、感知编排、场景 reset、组装内存中的处理器 |
 | `configuration_humanego.py` | 原生 PreTrainedConfig 与固定能力声明 |
 | `modeling_humanego.py` | 一个 ICTPolicy 实例、设备/噪声管理、原生动作块整理 |
-| `export.py` | 自包含部署产物和官方 server.yaml |
+| `server.py` | 读取配置、构造并预热 LeRobot runner、写入运行配置快照、启动服务 |
 
 ```text
 同步 RGB 双目 + 实测右 EE 状态
@@ -138,11 +127,11 @@ deployment:
 
 官方启动零输入预热只在首次 reset 之前可用，不创建场景。预热执行真实感知模型和原策略计算；启动 reset 后永久关闭这条探测分支。之后即使任务字符串为 `warmup`，非法零位姿也会正常失败。reset 保留模型资源与固定噪声。
 
-DINO 与 SAM 默认分别使用 `segmentation.dino_precision: float16`、`sam_precision: float16` 的局部 autocast；原策略和 LaMa 保持 FP32。可设置 `float32` 回退，`bfloat16` 仅用于显式实验。旧部署包缺少这些配置时保持原 FP32/continuous 行为，需要重新导出才能启用优化。
+DINO 与 SAM 默认分别使用 `segmentation.dino_precision: float16`、`sam_precision: float16` 的局部 autocast，原策略和 LaMa 使用 FP32。可设置 `float32` 回退，`bfloat16` 仅用于显式实验。
 
 默认 DINO 保留 800 短边、完整编码器/解码器和 900 queries。`dino_cuda_kernel_revision` 固定融合可变形注意力算子的 Hub commit，使用 `kernels==0.12.3` 加载匹配 Torch 2.7 / CUDA 12.6 的预编译算子；采样和累加输入统一为 FP32，避免 autocast 混合 dtype 导致错误。首次运行需联网填充算子缓存，完整缓存后支持 `HF_HUB_OFFLINE=1`。将 revision 设为 `null` 可使用原 PyTorch 算子。
 
-LaMa 默认 `static_batch: true`、`cuda_graph: true`：固定 batch=1，在启动预热时捕获 CUDA Graph，后续请求更新固定 GPU 输入缓冲并回放；输出同样绑定固定地址。ORT 按调用线程缓存 Graph，因此启动预热和正式请求都通过同一个 LaMa 执行线程，避免 worker 首请求重新捕获。reset 保留这些缓冲，但每次请求都会更新图像和 mask。该实例与场景处理器一样按请求串行使用。旧部署包缺少新配置时仍使用原运行方式；启用需更新包内 `assets/params.yaml` 并重启服务。
+LaMa 默认 `static_batch: true`、`cuda_graph: true`：固定 batch=1，在启动预热时捕获 CUDA Graph，后续请求更新固定 GPU 输入缓冲并回放；输出同样绑定固定地址。ORT 按调用线程缓存 Graph，因此启动预热和正式请求都通过同一个 LaMa 执行线程，避免 worker 首请求重新捕获。reset 保留这些缓冲，但每次请求都会更新图像和 mask。该实例与场景处理器一样按请求串行使用。
 
 2026-11-02 在本机 RTX 3060 上，对四帧真实机械臂双目画面各测 10 次稳定请求，另测首次场景定位，并比较 mask、物体位置、修复图与完整动作。阶段计时使用 CUDA 同步，不含网络与文件诊断；首次定位不含服务启动预热。详细结果保存在 `runs/inference-validation/optimization/`。此对比的基线已使用 FP16 和 events，线上 full 诊断还会产生额外耗时。测试过的 DINO 缩图、减少 queries、LaMa 半精度和 SAM 缩图配置未作为默认值，原因是漏检、修复伪影或动作偏差。
 

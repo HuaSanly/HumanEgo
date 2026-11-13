@@ -11,8 +11,6 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 class HumanEgoConfig(PreTrainedConfig):
     chunk_size: int = 50
     n_action_steps: int = 50
-    params_file: str = "assets/params.yaml"
-    noise_file: str = "noise.npy"
 
     def __post_init__(self):
         super().__post_init__()

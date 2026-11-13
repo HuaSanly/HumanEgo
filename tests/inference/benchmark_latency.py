@@ -10,13 +10,12 @@ from pathlib import Path
 import time
 from unittest.mock import patch
 
-import draccus
 import cv2
 import numpy as np
 import torch
 from lerobot.inference import ExecutionMode, ObservationSnapshot
-from lerobot.remote_inference import ServerConfig, load_deployment
-from lerobot.utils import register_third_party_plugins
+from lerobot_policy_humanego.config import load_config
+from lerobot_policy_humanego.server import load_runner, server_config
 
 
 def summary(values):
@@ -28,7 +27,7 @@ def summary(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--config_path", type=Path, required=True)
     parser.add_argument("--observation", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -47,12 +46,9 @@ def main():
         default=["float32/float32", "float16/float16", "bfloat16/bfloat16"],
     )
     args = parser.parse_args()
-    register_third_party_plugins()
-    with (args.bundle / "server.yaml").open() as handle:
-        cfg = draccus.load(ServerConfig, handle)
-    cfg.model.repo_or_path = str(args.bundle.resolve())
+    config = load_config(args.config_path)
     start = time.perf_counter()
-    runner, _ = load_deployment(cfg)
+    runner, _ = load_runner(config, server_config(config))
     torch.cuda.synchronize()
     report = {
         "initialization_s": time.perf_counter() - start,

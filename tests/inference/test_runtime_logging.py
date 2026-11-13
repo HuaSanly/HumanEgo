@@ -44,6 +44,7 @@ def test_receive_log_precedes_admission(caplog):
 @pytest.mark.parametrize("failed", [False, True])
 def test_context_follows_request_and_is_cleared_on_failure(caplog, failed):
     worker = LoggedSessionWorker.__new__(LoggedSessionWorker)
+    worker.trace_root = None
     response = message(
         MessageType.ACTION, {"canonical_actions": np.zeros((3, 10), np.float32)}
     )

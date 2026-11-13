@@ -3,6 +3,8 @@ policy:
   ckpt: ../../runs/pick_cube/HumanEgo_anchor/latest.pt
   num_inference_steps: 20
   device: cuda
+  noise_seed: 0
+  noise_path: null
 camera:
   image_size_hw:
   - 480
@@ -92,6 +94,11 @@ perception:
       - 255
       - 0
 deployment:
+  log_dir: ../../runs/inference
+  log_level: INFO
+  action_deadline_s: 30.0
+  idle_timeout_s: 60.0
+  warmup_calls: 2
   diagnostic_dir: null
   diagnostic_mode: canvas  # full saves per-request process data when diagnostic_dir is set
   name: humanego-pick-cube-anchor

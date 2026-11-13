@@ -13,7 +13,6 @@ from uuid import uuid4
 
 import numpy as np
 import torch
-import yaml
 from lerobot.inference import (
     ChunkRuntime,
     ExecutionMode,
@@ -27,6 +26,8 @@ from lerobot.remote_inference.protocol import (
     ErrorCode,
     ProtocolError,
 )
+from lerobot_policy_humanego.config import load_config
+from lerobot_policy_humanego.server import server_config
 
 
 class RecordedRobot:
@@ -53,19 +54,20 @@ class RecordedRobot:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--config_path", type=Path, required=True)
     parser.add_argument("--observation", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--chunks", type=int, default=4)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    server = yaml.safe_load((args.bundle / "server.yaml").read_text())
+    params = load_config(args.config_path)
+    server = server_config(params)
     config = RemoteInferenceConfig(
-        endpoint=server["zenoh"]["listen_endpoints"][0].replace(
+        endpoint=server.zenoh.listen_endpoints[0].replace(
             "tcp/0.0.0.0:", "tcp/127.0.0.1:", 1
         ),
-        deployment=server["deployment"],
-        semantics=server["semantics"],
+        deployment=server.deployment,
+        semantics=server.semantics,
         chunk_merge="append",
         max_observation_age_s=10,
         handshake_timeout_s=2,
@@ -80,9 +82,7 @@ def main():
             "-m",
             "lerobot_policy_humanego.server",
             "--config_path",
-            str((args.bundle / "server.yaml").resolve()),
-            "--model.repo_or_path",
-            str(args.bundle.resolve()),
+            str(params.source),
         ],
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -258,15 +258,27 @@ def main():
                     for line in server_log.splitlines()
                 ), (event, request_id)
         assert "error_published" in server_log
-        params = yaml.safe_load((args.bundle / "assets/params.yaml").read_text())
-        if params["deployment"].get("diagnostic_mode") == "full" and params[
-            "deployment"
-        ].get("diagnostic_dir"):
-            root = Path(params["deployment"]["diagnostic_dir"])
+        snapshot_line = next(
+            line.split("config_snapshot path=", 1)[1]
+            for line in server_log.splitlines()
+            if "config_snapshot path=" in line
+        )
+        snapshot_path = Path(snapshot_line.rsplit(" artifact=", 1)[0])
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        assert snapshot["source"] == str(params.source)
+        assert snapshot["policy"] == params.policy
+        assert snapshot["intrinsics"] == params.intrinsics
+        assert snapshot["extrinsics"] == params.extrinsics
+        assert snapshot["artifact_identity"].startswith("sha256:")
+        assert (snapshot_path.parent / "server.log").is_file()
+        if params.deployment.get("diagnostic_mode") == "full" and params.deployment.get(
+            "diagnostic_dir"
+        ):
+            root = Path(params.deployment["diagnostic_dir"]) / snapshot_path.parent.name
             for request_id, received_actions in zip(
                 request_ids, accepted_actions, strict=True
             ):
-                folders = list(root.glob(f"run_*/*/*/{request_id}"))
+                folders = list(root.glob(f"*/*/{request_id}"))
                 assert len(folders) == 1
                 folder = folders[0]
                 for name in (
@@ -318,6 +330,7 @@ def main():
             p95_s=float(np.percentile(latencies, 95)),
             checks=[
                 "official server worker and transport with correlated runtime logs",
+                "direct config startup and per-run configuration snapshot",
                 "Zenoh raw640 stereo",
                 "continuous refill via ChunkRuntime",
                 "canonical float32 50x10",

@@ -11,7 +11,6 @@ dependencies = ["numpy>=2,<2.3", "PyYAML>=6", "python-box>=7", "scipy>=1.18.1", 
 
 [project.scripts]
 humanego-policy-server = "lerobot_policy_humanego.server:main"
-humanego-export = "lerobot_policy_humanego.export:main"
 
 [tool.setuptools]
 packages = ["lerobot_policy_humanego"]

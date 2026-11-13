@@ -8,28 +8,25 @@ from pathlib import Path
 import time
 
 import cv2
-import draccus
 import numpy as np
 import torch
 from lerobot.inference import ObservationSnapshot, ExecutionMode
-from lerobot.remote_inference import load_deployment, ServerConfig
-from lerobot.utils import register_third_party_plugins
+from lerobot_policy_humanego.config import load_config
+from lerobot_policy_humanego.server import load_runner, server_config
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--config_path", type=Path, required=True)
     parser.add_argument("--observation", type=Path, required=True)
     parser.add_argument("--requests", type=int, default=5)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, force=True)
-    register_third_party_plugins()
-    with (args.bundle / "server.yaml").open() as f:
-        cfg = draccus.load(ServerConfig, f)
-    cfg.model.repo_or_path = str(args.bundle.resolve())
+    config = load_config(args.config_path)
+    cfg = server_config(config)
     start = time.perf_counter()
-    runner, identity = load_deployment(cfg)
+    runner, identity = load_runner(config, cfg)
     torch.cuda.synchronize()
     initialization = time.perf_counter() - start
     data = np.load(args.observation)

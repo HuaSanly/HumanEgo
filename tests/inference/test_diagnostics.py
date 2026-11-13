@@ -45,17 +45,10 @@ def input_message():
     )
 
 
-def config():
-    return SimpleNamespace(
-        policy={}, camera={}, perception={}, intrinsics={}, extrinsics={}
-    )
-
-
 @pytest.mark.parametrize("failed", [False, True])
 def test_trace_keeps_exact_input_and_partial_failure(tmp_path, failed):
     worker = LoggedSessionWorker.__new__(LoggedSessionWorker)
     worker.trace_root = tmp_path
-    worker.runner = SimpleNamespace(policy=SimpleNamespace(serving_config=config()))
     request = input_message()
     actions = np.zeros((50, 10), np.float32)
 
@@ -125,7 +118,7 @@ def test_trace_records_actual_transport_output_and_failure(tmp_path):
 
 
 def test_disabled_mode_does_not_create_files(tmp_path):
-    with record_request(None, input_message(), None) as trace:
+    with record_request(None, input_message()) as trace:
         assert trace is None
         assert current_trace() is None
     assert not list(tmp_path.iterdir())
@@ -134,7 +127,7 @@ def test_disabled_mode_does_not_create_files(tmp_path):
 def test_disk_error_does_not_break_processing(tmp_path):
     blocked = tmp_path / "not_a_directory"
     blocked.write_text("occupied")
-    with record_request(blocked, input_message(), config()) as trace:
+    with record_request(blocked, input_message()) as trace:
         assert trace.write_errors
         trace.array("data.npy", np.zeros(1))
     assert current_trace() is None
@@ -195,7 +188,7 @@ def test_stereo_output_survives_object_localization_failure(tmp_path):
     perception.stereo.points_from_mask = locate
     request = input_message()
     with pytest.raises(ValueError, match="bad points"):
-        with record_request(tmp_path, request, config()):
+        with record_request(tmp_path, request):
             perception.observe(observation())
     folder = trace_path(tmp_path, request)
     np.testing.assert_array_equal(
@@ -222,7 +215,7 @@ def test_lama_input_survives_inference_failure(tmp_path):
     mask = np.ones((480, 640), bool)
     request = input_message()
     with pytest.raises(RuntimeError, match="GPU failed"):
-        with record_request(tmp_path, request, config()):
+        with record_request(tmp_path, request):
             inpainter.inpaint(image, mask, np.zeros_like(mask))
     folder = trace_path(tmp_path, request)
     saved = np.load(folder / "lama/inputs.npz")

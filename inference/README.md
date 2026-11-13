@@ -61,7 +61,7 @@ DINO、SAM2 和 LaMa 按固定 Hub revision 从缓存加载。缓存完整时可
 | `action_published` | 已调用 Zenoh 发布，列出请求、动作形状、字节数和官方阶段耗时；`delivery_ack=false` 表示没有客户端接收或执行确认 |
 | `inference_failed` / `error_published` / `reply_publish_failed` | 推理异常、向客户端发布错误或传输发布失败 |
 
-启动预热标记为 `warmup_probe`。终端和 `server.log` 记录请求摘要。完整图像与动作数组可通过详情诊断保存。
+终端和 `server.log` 会提示权重加载、预热完成及服务退出。`DEBUG` 级别可查看每次 `warmup_probe`。终端和 `server.log` 也记录请求摘要，完整图像与动作数组可通过详情诊断保存。
 
 ## 详情诊断模式
 

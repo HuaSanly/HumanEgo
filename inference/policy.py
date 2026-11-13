@@ -27,6 +27,7 @@ matrices in the CAMERA frame, trajectories come out as EE targets in that frame.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -46,6 +47,8 @@ from utils.utils_math import (
 )
 
 from .data_types import ObjectState
+
+logger = logging.getLogger(__name__)
 
 
 def _inv(T: np.ndarray) -> np.ndarray:
@@ -141,8 +144,15 @@ class ICTPolicy:
 
         # Fixed noise -> deterministic action per call (resample for a stochastic policy).
         self.noise = torch.randn(1, self.pred_horizon, self.action_dim, device=device)
-        print(f"[ICTPolicy] loaded {ckpt_path} | hands={self.num_hands} ict_dim={self.ict_dim} "
-              f"frame={self.frame_mode} region_attn={self.use_region_attn} steps={self.num_inference_steps}")
+        logger.debug(
+            "ICTPolicy loaded %s | hands=%d ict_dim=%d frame=%s region_attn=%s steps=%d",
+            ckpt_path,
+            self.num_hands,
+            self.ict_dim,
+            self.frame_mode,
+            self.use_region_attn,
+            self.num_inference_steps,
+        )
 
     # ================================================================
     # Geometry helpers

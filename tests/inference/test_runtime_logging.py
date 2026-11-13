@@ -1,6 +1,7 @@
 """Logs describe received requests and actual transport publication boundaries."""
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -10,6 +11,7 @@ from lerobot.remote_inference import SessionWorker
 from lerobot.remote_inference.protocol import Envelope, MessageType
 from lerobot.remote_inference.codec import encode_message
 from lerobot.transport import ZenohTransport
+from lerobot_policy_humanego import server
 from lerobot_policy_humanego.runtime_logging import (
     LoggedSessionWorker,
     LoggedZenohTransport,
@@ -19,6 +21,28 @@ from lerobot_policy_humanego.runtime_logging import (
 
 def message(kind=MessageType.OBSERVATION, body=None):
     return Envelope(kind, "instance", "session", 2, "request-7", body or {})
+
+
+def test_ctrl_c_during_startup_exits_before_creating_worker(tmp_path, caplog):
+    config = SimpleNamespace(
+        deployment={"log_dir": str(tmp_path)}, source=tmp_path / "params.yaml"
+    )
+    server_config = SimpleNamespace(
+        log_level="INFO",
+        deployment="humanego-test",
+        model=SimpleNamespace(repo_or_path="latest.pt", device="cuda"),
+    )
+    with (
+        caplog.at_level(logging.INFO),
+        patch.object(server, "server_config", return_value=server_config),
+        patch.object(server, "init_logging"),
+        patch.object(server, "load_runner", side_effect=KeyboardInterrupt),
+        patch.object(server, "LoggedSessionWorker") as worker,
+    ):
+        server.serve(config)
+    worker.assert_not_called()
+    assert "收到 Ctrl+C，已取消启动" in caplog.text
+    assert "server_initialization_failed" not in caplog.text
 
 
 def test_receive_log_precedes_admission(caplog):

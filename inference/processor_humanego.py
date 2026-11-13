@@ -186,7 +186,7 @@ class HumanEgoPerceptionStep(ProcessorStep):
         )
         processor = self._processor()
         if probe:
-            logger.info("warmup_probe: startup only, no client observation")
+            logger.debug("warmup_probe: startup only, no client observation")
             # Startup-only probe creates no reference, objects or actionable scene.
             zeros = np.zeros((480, 640, 3), np.uint8)
             processor.perception.segmentation.segment(

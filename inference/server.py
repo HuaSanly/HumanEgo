@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 import signal
+import sys
 import time
 from uuid import uuid4
 
@@ -164,6 +165,7 @@ def load_runner(
         observation_id="warmup",
     )
     try:
+        logger.info("权重加载完成，正在初始化感知模型并预热")
         for _ in range(cfg.execution.warmup_calls):
             runner.predict(warmup, mode=ExecutionMode.CHUNK)
     finally:
@@ -182,7 +184,7 @@ def serve(config: InferenceConfig) -> None:
         file_level=cfg.log_level,
     )
     logger.info(
-        "server_loading deployment=%s config=%s checkpoint=%s device=%s",
+        "正在加载策略权重 | deployment=%s config=%s checkpoint=%s device=%s",
         cfg.deployment,
         config.source,
         cfg.model.repo_or_path,
@@ -190,6 +192,9 @@ def serve(config: InferenceConfig) -> None:
     )
     try:
         runner, identity = load_runner(config, cfg, run_dir=run_dir)
+    except KeyboardInterrupt:
+        logger.info("收到 Ctrl+C，已取消启动")
+        return
     except Exception:
         logger.exception("server_initialization_failed config=%s", config.source)
         raise
@@ -213,8 +218,9 @@ def serve(config: InferenceConfig) -> None:
     )
     server = PolicyServer(worker, transport)
     logger.info(
-        "server_warmed deployment=%s execution_steps=%d action_hz=%.1f",
+        "预热完成，正在启动监听 | deployment=%s endpoint=%s execution_steps=%d action_hz=%.1f",
         cfg.deployment,
+        cfg.zenoh.listen_endpoints[0],
         runner.capabilities.execution_steps,
         1 / runner.capabilities.action_interval,
     )
@@ -229,13 +235,17 @@ def serve(config: InferenceConfig) -> None:
     finally:
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
+    logger.info("推理服务已退出")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config_path", type=Path, required=True)
     args = parser.parse_args()
-    serve(load_config(args.config_path))
+    try:
+        serve(load_config(args.config_path))
+    except KeyboardInterrupt:
+        print("收到 Ctrl+C，推理程序已退出", file=sys.stderr)
 
 
 if __name__ == "__main__":

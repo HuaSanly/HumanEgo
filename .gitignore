@@ -42,3 +42,11 @@ htmlcov/
 *.swp
 *.swo
 *~
+
+# Local data and notes
+/_raw/
+/local_start.md
+
+# Inference build outputs
+/inference/**/build/
+/inference/**/dist/

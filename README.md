@@ -95,11 +95,12 @@ python simulation/scripts/evaluate.py --out pick_cube_eval_dev --report-only --v
 
 ## 推理服务器
 
-推理服务使用独立的 Python 3.12 环境；以下安装命令要求目标环境目录尚不存在：
+推理服务使用独立的 Python 3.12 Conda 环境：
 
 ```bash
-bash inference/install.sh /absolute/path/to/new-inference-env /path/to/python3.12
-source /absolute/path/to/new-inference-env/bin/activate
+conda create -n humanego-inference python=3.12 -y
+conda activate humanego-inference
+bash setup.sh inference
 
 # 检查配置和运行时依赖
 python -m inference.config --config_path cfg/inference/params.yaml --validate-runtime

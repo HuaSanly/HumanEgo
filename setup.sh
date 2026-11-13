@@ -35,6 +35,36 @@
 
 set -euo pipefail
 
+# Inference must be installed in a dedicated, activated Conda environment.
+if [[ "${1:-}" == "inference" ]]; then
+    if [[ $# -ne 1 ]]; then
+        echo "Usage: conda activate <inference-env> && bash setup.sh inference" >&2
+        exit 2
+    fi
+    if [[ -z "${CONDA_PREFIX:-}" || "${CONDA_DEFAULT_ENV:-}" == "base" ]]; then
+        echo "Activate a dedicated Conda environment with Python 3.12 first." >&2
+        exit 1
+    fi
+    project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    inference_python="$CONDA_PREFIX/bin/python"
+    if [[ ! -x "$inference_python" ]]; then
+        echo "Python not found in active Conda environment: $CONDA_PREFIX" >&2
+        exit 1
+    fi
+    "$inference_python" -c 'import os, sys; assert sys.version_info[:2] == (3, 12), "Python 3.12 required"; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ["CONDA_PREFIX"]), "Python is not running in the active Conda environment"'
+    echo "Installing inference dependencies into Conda environment: $CONDA_PREFIX"
+    "$inference_python" -m pip install 'pip==26.2.2' 'setuptools==81.0.0'
+    "$inference_python" -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu126
+    SAM2_BUILD_CUDA=0 "$inference_python" -m pip install --no-build-isolation -r "$project_root/inference/requirements.txt"
+    "$inference_python" -m pip install --no-deps "$project_root"
+    "$inference_python" -m pip check
+    "$inference_python" -c 'import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name())'
+    exit 0
+elif [[ $# -gt 0 ]]; then
+    echo "Usage: bash setup.sh [inference]" >&2
+    exit 2
+fi
+
 # ── Colors ──
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }

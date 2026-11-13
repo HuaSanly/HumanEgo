@@ -8,16 +8,17 @@
 
 ## 环境与安装
 
-独立 Python 3.12 环境，PyTorch 2.7.1 / torchvision 0.22.1 / CUDA 12.6、Transformers 5.4.0。`requirements.in` 固定直接依赖及官方 revision，`constraints.txt` 固定验证环境中的依赖版本。Transformers 5.4.0 配套固定 Hugging Face Hub 1.6.0，避免较新 Hub 严格字段校验与 DINO 配置不兼容。
+独立 Python 3.12 Conda 环境，PyTorch 2.7.1 / torchvision 0.22.1 / CUDA 12.6、Transformers 5.4.0。`inference/requirements.txt` 固定直接依赖、已验证的间接依赖版本及官方 revision。Transformers 5.4.0 配套固定 Hugging Face Hub 1.6.0，避免较新 Hub 严格字段校验与 DINO 配置不兼容。
 
-从项目根目录执行，目标环境必须尚不存在：
+先创建并激活专用 Conda 环境，再从项目根目录执行：
 
 ```bash
-bash inference/install.sh /absolute/path/to/new-inference-env /path/to/python3.12
-source /absolute/path/to/new-inference-env/bin/activate
+conda create -n humanego-inference python=3.12 -y
+conda activate humanego-inference
+bash setup.sh inference
 ```
 
-安装脚本创建新 venv，不修改训练或仿真环境。SAM2 神经网络使用 CUDA；安装时关闭可选 CUDA 后处理扩展，与本次验证环境一致。模块通过 `inference/pyproject.toml` 映射注册为 `lerobot_policy_humanego`，安装包携带原策略依赖的六个共享源模块，不需要部署训练目录。
+安装脚本向当前激活的 Conda 环境安装依赖；请勿在训练或仿真环境中运行。SAM2 神经网络使用 CUDA；安装时关闭可选 CUDA 后处理扩展，与本次验证环境一致。模块通过 根目录的 `pyproject.toml` 映射注册为 `lerobot_policy_humanego`，安装包携带原策略依赖的六个共享源模块，不需要部署训练目录。
 
 本机验证环境名为 `HumanEgo-inference`，可以执行 `conda activate HumanEgo-inference`。
 
